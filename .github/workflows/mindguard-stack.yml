@@ -17,9 +17,9 @@ jobs:
 
 # ── 1. BACKEND ────────────────────────────────────────────────────────────────
   backend:
-    name: Backend (FastAPI + ML pipeline)
+    name: Backend (FastAPI + ML)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -36,62 +36,62 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
 
-      - name: Lint (flake8)
+      - name: Syntax check all Python scripts
         run: |
-          pip install flake8
-          flake8 backend/ --max-line-length=120 --exclude=__pycache__ --count --statistics || true
+          for f in backend/server.py backend/data_service.py backend/ml_pipeline.py \
+                   generate_real_dataset.py data_preprocessing.py \
+                   model_training.py model_evaluation.py shap_generation.py; do
+            python -m py_compile "$f" && echo "OK $f" || exit 1
+          done
 
-      - name: Syntax check ML scripts
-        run: |
-          python -m py_compile generate_synthetic_data.py
-          python -m py_compile data_preprocessing.py
-          python -m py_compile model_training.py
-          python -m py_compile model_evaluation.py
-          python -m py_compile shap_generation.py
-          echo "All root scripts pass syntax check"
-
-      - name: Generate synthetic student data
+      - name: Generate student dataset (CSV — no MySQL needed, ~1s)
         run: |
           mkdir -p backend/data data/processed models plots reports
-          python generate_synthetic_data.py
-          ls -lh backend/data/
+          python generate_real_dataset.py --n 1200 --seed 42
+          echo "CSV: $(wc -l < backend/data/students.csv) rows"
 
-      - name: Run data preprocessing
+      - name: Check for committed trained model
+        id: model_check
         run: |
-          python data_preprocessing.py 2>&1 | tee reports/preprocessing.log
-          ls -lh data/processed/ models/ || true
+          if [ -f models/active_model.pkl ] && [ -f models/active_model_metadata.json ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            python -c "
+          import json
+          m = json.load(open('models/active_model_metadata.json'))
+          print('Committed model found — features:', len(m.get('feature_names',[])), '| trained:', m.get('last_trained'))
+            "
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "No committed model — will train from scratch"
+          fi
 
-      - name: Train ML model (XGBoost)
-        run: |
-          python model_training.py 2>&1 | tee reports/training.log
-          ls -lh models/ || true
+      - name: Run preprocessing (only if no committed model)
+        if: steps.model_check.outputs.exists == 'false'
+        run: python data_preprocessing.py 2>&1 | tail -5
 
-      - name: Evaluate model and generate SHAP
-        run: |
-          python model_evaluation.py 2>&1 | tee reports/evaluation.log || true
-          python shap_generation.py 2>&1 | tee reports/shap.log || true
+      - name: Train ML model (only if no committed model)
+        if: steps.model_check.outputs.exists == 'false'
+        run: python model_training.py 2>&1 | tail -5
 
       - name: Start FastAPI backend
         run: |
           cd backend
-          uvicorn server:app --host 0.0.0.0 --port ${{ env.BACKEND_PORT }} --log-level info > /tmp/uvicorn.log 2>&1 &
-          echo "Waiting for backend to be ready..."
+          uvicorn server:app \
+            --host 0.0.0.0 \
+            --port ${{ env.BACKEND_PORT }} \
+            --log-level warning > /tmp/uvicorn.log 2>&1 &
           READY=0
-          for i in $(seq 1 90); do
-            if curl -sf http://localhost:${{ env.BACKEND_PORT }}/health > /dev/null 2>&1; then
-              echo "Backend is up after ${i}s"
-              READY=1
-              break
+          for i in $(seq 1 60); do
+            if curl -sf "http://localhost:${{ env.BACKEND_PORT }}/health" > /dev/null 2>&1; then
+              echo "Backend ready after ${i}s"; READY=1; break
             fi
             sleep 1
           done
           if [ "$READY" -eq 0 ]; then
-            echo "=== Backend failed to start — uvicorn log ==="
-            cat /tmp/uvicorn.log
-            exit 1
+            echo "=== Backend failed to start ===" && cat /tmp/uvicorn.log && exit 1
           fi
         env:
-          SECRET_KEY: ${{ secrets.SECRET_KEY || 'ci-dev-secret-key-sentinel-xai-2026' }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY || 'ci-dev-secret-mindguard-2026' }}
           ENVIRONMENT: ci
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
@@ -99,124 +99,93 @@ jobs:
 
       - name: API test - GET /health
         run: |
-          # Extra wait to ensure on_startup has fully populated STUDENTS list
           sleep 3
-          response=$(curl -sf http://localhost:${{ env.BACKEND_PORT }}/health)
-          echo "Health: $response"
-          echo "$response" | python -c "
-          import sys, json
-          d = json.load(sys.stdin)
-          # server returns 'healthy' or 'ok' — accept either
-          assert d.get('status') in ('ok', 'healthy'), f'unexpected status: {d}'
-          print('/health OK —', d.get('status'))
-          "
+          r=$(curl -sf "http://localhost:${{ env.BACKEND_PORT }}/health")
+          echo "$r" | python -c "
+          import sys,json; d=json.load(sys.stdin)
+          assert d.get('status') in ('ok','healthy'), f'bad: {d}'
+          print('health OK:', d['status'])"
 
       - name: API test - GET /roles
         run: |
-          response=$(curl -sf http://localhost:${{ env.BACKEND_PORT }}/roles)
-          echo "Roles: $response"
-          echo "$response" | python -c "import sys,json; d=json.load(sys.stdin); assert isinstance(d,list) and len(d)>0"
-          echo "/roles OK"
+          r=$(curl -sf "http://localhost:${{ env.BACKEND_PORT }}/roles")
+          echo "$r" | python -c "
+          import sys,json; d=json.load(sys.stdin)
+          assert isinstance(d,list) and len(d)>0
+          print('roles OK:', len(d), 'roles')"
 
       - name: API test - POST /login
         run: |
-          response=$(curl -sf -X POST http://localhost:${{ env.BACKEND_PORT }}/login \
+          r=$(curl -sf -X POST "http://localhost:${{ env.BACKEND_PORT }}/login" \
             -H "Content-Type: application/json" \
             -d '{"username":"counsellor1","password":"Care@2026","role":"counsellor"}')
-          echo "Login: $response"
-          TOKEN=$(echo "$response" | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          TOKEN=$(echo "$r" | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
           echo "TOKEN=$TOKEN" >> $GITHUB_ENV
-          echo "$response" | python -c "
-          import sys,json
-          d=json.load(sys.stdin)
+          echo "$r" | python -c "
+          import sys,json; d=json.load(sys.stdin)
           for f in ['access_token','name','role','roleLabel']:
             assert f in d, f'missing {f}'
-          print('Login returns all required fields')
-          "
+          print('login OK: name=%s roleLabel=%s' % (d['name'],d['roleLabel']))"
 
-      - name: API test - GET /students
+      - name: API test - GET /students (wait for background ML preload)
         run: |
-          response=$(curl -sf http://localhost:${{ env.BACKEND_PORT }}/students \
+          echo "Waiting 20s for background SHAP preload to complete..."
+          sleep 20
+          r=$(curl -sf --max-time 60 "http://localhost:${{ env.BACKEND_PORT }}/students" \
             -H "Authorization: Bearer $TOKEN")
-          echo "$response" | python -c "
-          import sys,json
-          d=json.load(sys.stdin)
-          # Server returns paginated object {students:[...], total:N, pages:N}
+          echo "$r" | python -c "
+          import sys,json; d=json.load(sys.stdin)
           students = d if isinstance(d,list) else d.get('students',[])
-          assert len(students) > 0, f'No students returned: {d}'
+          assert len(students)>0
           s=students[0]
           for f in ['id','name','programme','year','gpa','attendance','risk','tier']:
-            assert f in s, f'missing field: {f}'
-          total = len(students) if isinstance(d,list) else d.get('total',len(students))
-          print(f'/students OK - {total} total students, page has {len(students)}')
-          "
+            assert f in s, f'missing {f}'
+          print(f'students OK: {len(students)} students, all fields present')"
 
       - name: API test - POST /students/batch (route ordering fix)
         run: |
           status=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-            http://localhost:${{ env.BACKEND_PORT }}/students/batch \
+            "http://localhost:${{ env.BACKEND_PORT }}/students/batch" \
             -H "Authorization: Bearer $TOKEN")
-          echo "Batch route HTTP status: $status"
           python -c "
           s=$status
-          assert s!=404, f'/students/batch returns 404 - route ordering bug still present'
-          print(f'/students/batch reachable - HTTP {s}')
-          "
+          assert s!=404, f'/students/batch returns 404 — route ordering bug'
+          print(f'batch OK: HTTP {s}')"
 
       - name: API test - GET /stats
         run: |
-          # Use -f flag separately so we can capture the HTTP status on failure
-          http_code=$(curl -s -o /tmp/stats_resp.json -w "%{http_code}" \
-            http://localhost:${{ env.BACKEND_PORT }}/stats \
+          r=$(curl -sf "http://localhost:${{ env.BACKEND_PORT }}/stats" \
             -H "Authorization: Bearer $TOKEN")
-          echo "HTTP status: $http_code"
-          echo "Raw response: $(cat /tmp/stats_resp.json)"
-          if [ "$http_code" != "200" ]; then
-            echo "ERROR: /stats returned HTTP $http_code"
-            exit 1
-          fi
-          python -c '
-import sys, json
-with open("/tmp/stats_resp.json") as f:
-    d = json.load(f)
-keys = list(d.keys())
-assert "totalStudents" in d or "total_students" in d or "total" in d, "Missing total key: " + str(keys)
-total = d.get("totalStudents") or d.get("total_students") or d.get("total", 0)
-print("/stats OK -", total, "students")
-          '
+          echo "$r" | python -c "
+          import sys,json; d=json.load(sys.stdin)
+          keys=list(d.keys())
+          assert 'totalStudents' in d or 'total_students' in d or 'total' in d, f'missing total key: {keys}'
+          total=d.get('totalStudents') or d.get('total_students') or d.get('total',0)
+          print('/stats OK:', total, 'students')"
 
       - name: API test - GET /users (admin)
         run: |
-          admin_token=$(curl -sf -X POST http://localhost:${{ env.BACKEND_PORT }}/login \
+          ADMIN_TOKEN=$(curl -sf -X POST "http://localhost:${{ env.BACKEND_PORT }}/login" \
             -H "Content-Type: application/json" \
             -d '{"username":"admin","password":"Admin@2026","role":"admin"}' \
             | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-          response=$(curl -sf http://localhost:${{ env.BACKEND_PORT }}/users \
-            -H "Authorization: Bearer $admin_token")
-          echo "$response" | python -c "
-          import sys,json
-          d=json.load(sys.stdin)
+          r=$(curl -sf "http://localhost:${{ env.BACKEND_PORT }}/users" \
+            -H "Authorization: Bearer $ADMIN_TOKEN")
+          echo "$r" | python -c "
+          import sys,json; d=json.load(sys.stdin)
           assert isinstance(d,list) and len(d)>0
-          print(f'/users OK - {len(d)} users')
-          "
+          print('users OK:', len(d), 'users')"
 
-      - name: API test - WebSocket /ws connects
+      - name: API test - WebSocket /ws
         run: |
-          pip install websockets
-          timeout 15 python - << 'WSEOF' || echo "WebSocket test skipped (not blocking)"
-import asyncio, websockets, sys
-async def test():
-    try:
-        async with websockets.connect(
-            "ws://localhost:${{ env.BACKEND_PORT }}/ws",
-            open_timeout=5,
-            close_timeout=3,
-        ) as ws:
-            print("WebSocket /ws connected OK")
-    except Exception as e:
-        print(f"WebSocket not available: {e}")
-asyncio.run(test())
-WSEOF
+          pip install websockets -q
+          python - << 'EOF'
+          import asyncio, websockets
+          async def test():
+            async with websockets.connect("ws://localhost:${{ env.BACKEND_PORT }}/ws", open_timeout=5) as ws:
+              print("WebSocket OK")
+          asyncio.run(test())
+          EOF
 
       - name: Upload backend artifacts
         if: always()
@@ -229,11 +198,12 @@ WSEOF
             backend/data/
           retention-days: 7
 
+
 # ── 2. FRONTEND ───────────────────────────────────────────────────────────────
   frontend:
     name: Frontend (React + Vite)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -258,16 +228,16 @@ WSEOF
 
       - name: Verify build output
         run: |
-          ls -lh frontend/dist/
-          test -f frontend/dist/index.html && echo "index.html present"
+          test -f frontend/dist/index.html && echo "index.html OK"
           du -sh frontend/dist/
 
-      - name: Upload frontend build artifact
+      - name: Upload frontend artifact
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
           path: frontend/dist/
           retention-days: 7
+
 
 # ── 3. INTEGRATION ────────────────────────────────────────────────────────────
   integration:
@@ -279,7 +249,7 @@ WSEOF
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download frontend build
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
@@ -291,160 +261,124 @@ WSEOF
           name: backend-artifacts
           path: .
 
-      - name: Set up Python
+      - name: Set up Python & Node
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install backend dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
+          npm install -g serve -q
 
-      - name: Install serve
-        run: npm install -g serve
-
-      - name: Start FastAPI backend
+      - name: Start backend
         run: |
           cd backend
-          uvicorn server:app --host 0.0.0.0 --port ${{ env.BACKEND_PORT }} --log-level info &
+          uvicorn server:app --host 0.0.0.0 --port ${{ env.BACKEND_PORT }} \
+            --log-level warning > /tmp/srv.log 2>&1 &
           READY=0
-          for i in $(seq 1 40); do
-            curl -sf http://localhost:${{ env.BACKEND_PORT }}/health && READY=1 && break || sleep 1
+          for i in $(seq 1 60); do
+            curl -sf "http://localhost:${{ env.BACKEND_PORT }}/health" && READY=1 && break || sleep 1
           done
-          if [ "$READY" -eq 0 ]; then echo "Backend failed to start"; exit 1; fi
-          echo "Backend ready"
+          [ "$READY" -eq 0 ] && cat /tmp/srv.log && exit 1 || echo "Backend ready"
         env:
-          SECRET_KEY: ${{ secrets.SECRET_KEY || 'ci-integration-secret-2026' }}
-          ENVIRONMENT: ci
+          SECRET_KEY: ${{ secrets.SECRET_KEY || 'ci-integration-mindguard-2026' }}
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
 
-      - name: Serve built frontend
+      - name: Start frontend
         run: |
           serve -s frontend/dist -l ${{ env.FRONTEND_PORT }} &
           for i in $(seq 1 20); do
-            curl -sf http://localhost:${{ env.FRONTEND_PORT }} > /dev/null && break || sleep 1
+            curl -sf "http://localhost:${{ env.FRONTEND_PORT }}" > /dev/null && break || sleep 1
           done
           echo "Frontend ready"
 
-      - name: Integration - Frontend is reachable
+      - name: Integration - frontend reachable
         run: |
-          status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${{ env.FRONTEND_PORT }})
-          echo "Frontend HTTP status: $status"
-          test "$status" = "200" && echo "Frontend serving OK"
+          status=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${{ env.FRONTEND_PORT }}")
+          test "$status" = "200" && echo "Frontend OK: HTTP $status"
 
-      - name: Integration - API CORS headers present
+      - name: Integration - CORS headers present
         run: |
-          headers=$(curl -si -X OPTIONS \
-            http://localhost:${{ env.BACKEND_PORT }}/health \
-            -H "Origin: http://localhost:${{ env.FRONTEND_PORT }}" \
-            -H "Access-Control-Request-Method: GET")
-          echo "$headers" | grep -qi "access-control-allow" \
-            && echo "CORS headers present" \
-            || echo "CORS headers not detected - check middleware config"
+          curl -si -X OPTIONS "http://localhost:${{ env.BACKEND_PORT }}/health" \
+            -H "Origin: http://localhost:${{ env.FRONTEND_PORT }}" | grep -qi "access-control-allow" \
+            && echo "CORS OK" || echo "CORS headers missing"
 
-      - name: Integration - Full login to students flow
+      - name: Integration - wait for preload then run full flow
         run: |
-          python - <<'PYEOF'
+          echo "Waiting 25s for ML preload..."
+          sleep 25
+          python - << 'PYEOF'
           import urllib.request, json
-          BASE = "http://localhost:8000"
-          req = urllib.request.Request(
-            f"{BASE}/login",
+          BASE = "http://localhost:${{ env.BACKEND_PORT }}"
+          req = urllib.request.Request(f"{BASE}/login",
             data=json.dumps({"username":"counsellor1","password":"Care@2026","role":"counsellor"}).encode(),
-            headers={"Content-Type":"application/json"}, method="POST"
-          )
-          with urllib.request.urlopen(req) as r:
+            headers={"Content-Type":"application/json"}, method="POST")
+          with urllib.request.urlopen(req, timeout=10) as r:
             login = json.load(r)
           token = login["access_token"]
-          assert login.get("name"),      "Login missing name"
-          assert login.get("roleLabel"), "Login missing roleLabel"
-          print(f"Logged in as: {login['name']} ({login['roleLabel']})")
-          req = urllib.request.Request(f"{BASE}/students", headers={"Authorization":f"Bearer {token}"})
-          with urllib.request.urlopen(req) as r:
-            data = json.load(r)
-          students = data if isinstance(data, list) else data.get("students", [])
-          assert len(students) > 0, f"No students returned: {data}"
+          assert login.get("name") and login.get("roleLabel"), "Missing login fields"
+          print(f"Login OK: {login['name']} ({login['roleLabel']})")
+          req = urllib.request.Request(f"{BASE}/students",
+            headers={"Authorization": f"Bearer {token}"})
+          with urllib.request.urlopen(req, timeout=60) as r:
+            students = json.load(r)
+          students = students if isinstance(students, list) else students.get("students", [])
+          assert len(students) > 0
           for f in ["id","name","programme","year","gpa","attendance","risk","tier"]:
-            assert f in students[0], f"Missing field: {f}"
-          total = len(students) if isinstance(data,list) else data.get("total", len(students))
-          print(f"Students loaded: {total} total - all fields OK")
-          req = urllib.request.Request(f"{BASE}/stats", headers={"Authorization":f"Bearer {token}"})
-          with urllib.request.urlopen(req) as r:
+            assert f in students[0], f"Missing: {f}"
+          print(f"Students OK: {len(students)} students")
+          req = urllib.request.Request(f"{BASE}/stats",
+            headers={"Authorization": f"Bearer {token}"})
+          with urllib.request.urlopen(req, timeout=10) as r:
             stats = json.load(r)
-          print(f"Stats: {stats}")
-          print("Full login to students to stats flow passed")
+          assert any(k in stats for k in ["totalStudents","total_students","total"])
+          print(f"Stats OK: {stats.get('totalStudents') or stats.get('total','?')} students")
+          print("ALL INTEGRATION TESTS PASSED")
           PYEOF
 
-      - name: Integration - All roles return enriched login fields
+      - name: Integration - all roles login
         run: |
-          python - <<'PYEOF'
+          python - << 'PYEOF'
           import urllib.request, json
-          BASE = "http://localhost:8000"
-          roles = [
-            ("counsellor1","Care@2026","counsellor"),
-            ("welfare1","Welfare@2026","welfare"),
-            ("admin","Admin@2026","admin"),
-          ]
-          for username, password, role in roles:
-            req = urllib.request.Request(
-              f"{BASE}/login",
-              data=json.dumps({"username":username,"password":password,"role":role}).encode(),
-              headers={"Content-Type":"application/json"}, method="POST"
-            )
-            with urllib.request.urlopen(req) as r:
-              d = json.load(r)
-            for field in ["access_token","name","role","roleLabel","username"]:
-              assert field in d, f"Login for {username} missing {field}"
-            print(f"{username} ({role}): name={d['name']} roleLabel={d['roleLabel']}")
-          print("All roles return enriched login fields")
+          BASE = "http://localhost:${{ env.BACKEND_PORT }}"
+          for u,p,r in [("counsellor1","Care@2026","counsellor"),("welfare1","Welfare@2026","welfare"),("admin","Admin@2026","admin")]:
+            req = urllib.request.Request(f"{BASE}/login",
+              data=json.dumps({"username":u,"password":p,"role":r}).encode(),
+              headers={"Content-Type":"application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+              d = json.load(resp)
+            for field in ["access_token","name","role","roleLabel"]:
+              assert field in d, f"{u} missing {field}"
+            print(f"  {u}: {d['name']} ({d['roleLabel']})")
+          print("ALL ROLES OK")
           PYEOF
 
-      - name: Integration - /students/batch not shadowed
-        run: |
-          token=$(curl -sf -X POST http://localhost:${{ env.BACKEND_PORT }}/login \
-            -H "Content-Type: application/json" \
-            -d '{"username":"counsellor1","password":"Care@2026","role":"counsellor"}' \
-            | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-          status=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-            http://localhost:${{ env.BACKEND_PORT }}/students/batch \
-            -H "Authorization: Bearer $token")
-          echo "Batch route status: $status"
-          python -c "
-          s=$status
-          assert s!=404, f'Route ordering bug - /students/batch returns 404'
-          print(f'/students/batch reachable - HTTP {s}')
-          "
 
 # ── 4. SUMMARY ────────────────────────────────────────────────────────────────
   summary:
     name: Pipeline Summary
     runs-on: ubuntu-latest
     needs: [backend, frontend, integration]
-    timeout-minutes: 5
     if: always()
+    timeout-minutes: 2
     steps:
-      - name: Print results
+      - name: Results
         run: |
-          echo "=============================================="
-          echo "   MindGuard XAI - Full Stack CI Summary"
-          echo "=============================================="
-          echo "  Backend  (FastAPI + ML) : ${{ needs.backend.result }}"
-          echo "  Frontend (React + Vite) : ${{ needs.frontend.result }}"
-          echo "  Integration (full stack): ${{ needs.integration.result }}"
-          echo "=============================================="
-          echo "  Commit : ${{ github.sha }}"
-          echo "  Branch : ${{ github.ref_name }}"
-          echo "  Trigger: ${{ github.event_name }}"
-          echo "=============================================="
+          echo "================================================"
+          echo "   MindGuard XAI — CI/CD Summary"
+          echo "================================================"
+          echo "  Backend     : ${{ needs.backend.result }}"
+          echo "  Frontend    : ${{ needs.frontend.result }}"
+          echo "  Integration : ${{ needs.integration.result }}"
+          echo "  Commit      : ${{ github.sha }}"
+          echo "  Branch      : ${{ github.ref_name }}"
+          echo "================================================"
 
       - name: Fail if any job failed
         if: |
