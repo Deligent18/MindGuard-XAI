@@ -22,8 +22,8 @@ A production-ready platform that predicts mental health risks among university s
 
 ```bash
 # 1. Clone
-git clone https://github.com/Deligent18/sentinel-XAI.git
-cd sentinel-XAI
+git clone https://github.com/Deligent18/MindGuard-XAI.git
+cd MindGuard-XAI
 
 # 2. Backend
 cd backend
@@ -58,7 +58,7 @@ Open **http://localhost:3000**
 ## 📁 Project Structure
 
 ```
-sentinel-XAI/
+MindGuard-XAI/
 ├── backend/                  # FastAPI application
 │   ├── server.py             # Main API + lifespan startup
 │   ├── ml_pipeline.py        # XGBoost training + SHAP inference

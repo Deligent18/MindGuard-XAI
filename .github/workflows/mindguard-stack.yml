@@ -1,4 +1,4 @@
-name: Sentinel XAI - Full Stack
+name: MindGuard XAI - Full Stack
 
 on:
   push:
@@ -435,7 +435,7 @@ WSEOF
       - name: Print results
         run: |
           echo "=============================================="
-          echo "   Sentinel XAI - Full Stack CI Summary"
+          echo "   MindGuard XAI - Full Stack CI Summary"
           echo "=============================================="
           echo "  Backend  (FastAPI + ML) : ${{ needs.backend.result }}"
           echo "  Frontend (React + Vite) : ${{ needs.frontend.result }}"
