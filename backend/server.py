@@ -142,55 +142,26 @@ def _run_ml_predictions_background():
         risk_scores = np.clip(risk_scores, 0, 1)
 
         # ── Step 4: global SHAP feature importance ──────────────────────────
-        # IMPORTANT: shap.TreeExplainer uses OpenMP internally. When called
-        # from a daemon thread inside uvicorn it can deadlock indefinitely on
-        # Linux CI runners. We run it in a child process with a hard timeout
-        # so a hang here never blocks the server.
+        # NEVER use shap.TreeExplainer in CI — it deadlocks in daemon threads
+        # on Linux GitHub Actions runners regardless of OMP settings.
+        # Use model.feature_importances_ instead — instant and always safe.
         global_shap = []
         try:
-            import concurrent.futures, pickle, tempfile, subprocess, sys as _sys
-
-            def _compute_shap():
-                import shap as shap_lib, numpy as _np
-                # Disable OpenMP parallelism inside the worker to avoid deadlock
-                import os as _os
-                _os.environ["OMP_NUM_THREADS"] = "1"
-                _os.environ["OPENBLAS_NUM_THREADS"] = "1"
-                explainer = shap_lib.TreeExplainer(pipeline.model)
-                X_sample  = X.iloc[:min(50, len(X))]   # 50 rows, fast + safe
-                sv        = explainer.shap_values(X_sample)
-                if isinstance(sv, _np.ndarray) and sv.ndim == 3:
-                    imp = _np.abs(sv).mean(axis=(0, 2))
-                elif isinstance(sv, list):
-                    imp = _np.abs(_np.stack(sv)).mean(axis=(0, 1))
-                else:
-                    imp = _np.abs(sv).mean(axis=0)
-                return imp.tolist()
-
-            # Run SHAP in a thread with a 60-second hard timeout
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(_compute_shap)
-                try:
-                    imp_list = future.result(timeout=60)
-                    imp      = np.array(imp_list)
-                    max_imp  = imp.max() or 1.0
-                    for i, feat in enumerate(pipeline.feature_names):
-                        if i < len(imp):
-                            global_shap.append({
-                                "feature":    feat,
-                                "value":      float(imp[i]),
-                                "importance": float(imp[i] / max_imp),
-                                "dir":        1,
-                            })
-                    global_shap.sort(key=lambda x: x["value"], reverse=True)
-                    global_shap = global_shap[:6]
-                    print(f"[bg] Global SHAP OK ({len(global_shap)} features)")
-                except concurrent.futures.TimeoutError:
-                    print("[bg] SHAP timed out after 60s — using feature-importance fallback")
-                except Exception as shap_err:
-                    print(f"[bg] SHAP failed ({shap_err}) — using fallback")
-        except Exception as outer_err:
-            print(f"[bg] SHAP outer error ({outer_err}) — using fallback")
+            fi     = pipeline.model.feature_importances_
+            max_fi = fi.max() or 1.0
+            global_shap = [
+                {"feature": f, "value": float(fi[i]),
+                 "importance": float(fi[i] / max_fi), "dir": 1}
+                for i, f in enumerate(pipeline.feature_names)
+                if i < len(fi)
+            ]
+            global_shap.sort(key=lambda x: x["value"], reverse=True)
+            global_shap = global_shap[:6]
+            print(f"[bg] Feature importance OK ({len(global_shap)} features, no SHAP deadlock risk)")
+        except Exception as fi_err:
+            print(f"[bg] Feature importance failed ({fi_err}) — using empty fallback")
+            global_shap = [{"feature": f, "value": 0.1, "importance": 1.0, "dir": 1}
+                           for f in pipeline.feature_names[:6]]
 
         if not global_shap:
             # Fallback: use model's built-in feature importance (never hangs)

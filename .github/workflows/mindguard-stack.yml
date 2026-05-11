@@ -129,9 +129,9 @@ jobs:
 
       - name: API test - GET /students (wait for background ML preload)
         run: |
-          echo "Waiting 20s for background SHAP preload to complete..."
-          sleep 20
-          r=$(curl -sf --max-time 60 "http://localhost:${{ env.BACKEND_PORT }}/students" \
+          echo "Waiting 8s for background ML preload (no SHAP — uses feature_importances_)..."
+          sleep 8
+          r=$(curl -sf --max-time 30 "http://localhost:${{ env.BACKEND_PORT }}/students" \
             -H "Authorization: Bearer $TOKEN")
           echo "$r" | python -c "
           import sys,json; d=json.load(sys.stdin)
@@ -311,8 +311,8 @@ jobs:
 
       - name: Integration - wait for preload then run full flow
         run: |
-          echo "Waiting 25s for ML preload..."
-          sleep 25
+          echo "Waiting 10s for ML preload (no SHAP deadlock risk)..."
+          sleep 10
           python - << 'PYEOF'
           import urllib.request, json
           BASE = "http://localhost:${{ env.BACKEND_PORT }}"
