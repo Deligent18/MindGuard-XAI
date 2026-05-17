@@ -622,31 +622,69 @@ class MLPipeline:
         return interventions.get(tier, interventions['low'])
     
     def generate_explanation_text(self, data: Dict, shap_values: List[Dict], tier: str) -> str:
-        """Generate human-readable explanation"""
-        
+        """
+        Generate a human-readable XAI explanation using the actual top SHAP
+        feature drivers computed for this specific student.
+        """
         tier_descriptions = {
-            'high': "critical risk profile",
+            'high':   "critical risk profile",
             'medium': "moderate risk profile",
-            'low': "low risk profile"
+            'low':    "low risk profile",
         }
-        
+
         student_name = data.get('name', 'This student')
-        
-        if tier == 'high':
-            explanation = f"{student_name} shows a {tier_descriptions[tier]}. "
-            explanation += "Severe academic decline, near-total withdrawal from campus "
-            explanation += "and digital engagement indicate an acute crisis state. "
-            explanation += "Urgent intervention is required."
-        elif tier == 'medium':
-            explanation = f"{student_name} shows a {tier_descriptions[tier]} "
-            explanation += "characterised by gradual academic decline and reduced social engagement. "
-            explanation += "Proactive outreach and academic support referral are recommended."
+
+        # Top risk-increasing SHAP features (positive contribution)
+        risk_drivers = sorted(
+            [s for s in shap_values if s.get('dir', 1) > 0 and abs(s.get('value', 0)) > 0.01],
+            key=lambda x: abs(x.get('value', 0)), reverse=True
+        )
+
+        # Top protective SHAP features (negative contribution)
+        protective = sorted(
+            [s for s in shap_values if s.get('dir', 1) < 0 and abs(s.get('value', 0)) > 0.01],
+            key=lambda x: abs(x.get('value', 0)), reverse=True
+        )
+
+        # Build driver sentence from top 2 SHAP features
+        top_factors = [d.get('feature', '').lower() for d in risk_drivers[:2] if d.get('feature')]
+        if len(top_factors) >= 2:
+            driver_sentence = f"The primary drivers are {top_factors[0]} and {top_factors[1]}. "
+        elif len(top_factors) == 1:
+            driver_sentence = f"The primary driver is {top_factors[0]}. "
         else:
-            explanation = f"{student_name} presents a {tier_descriptions[tier]} "
-            explanation += "with strong academic engagement and consistent campus participation. "
-            explanation += "No immediate action required. Standard wellness communications applicable."
-        
-        return explanation
+            driver_sentence = ""
+
+        # Build protective sentence
+        prot_feat = protective[0].get('feature', '').lower() if protective else ""
+        protective_sentence = f"A positive factor is {prot_feat}. " if prot_feat else ""
+
+        if tier == 'high':
+            explanation = (
+                f"{student_name} shows a {tier_descriptions[tier]}. "
+                f"{driver_sentence}"
+                "The combination of these signals indicates an acute crisis state requiring urgent attention. "
+                f"{protective_sentence}"
+                "Immediate counsellor contact is strongly recommended."
+            )
+        elif tier == 'medium':
+            explanation = (
+                f"{student_name} shows a {tier_descriptions[tier]}. "
+                f"{driver_sentence}"
+                "This pattern suggests emerging distress over the past 4-6 weeks. "
+                f"{protective_sentence}"
+                "Proactive outreach and academic support referral are recommended."
+            )
+        else:
+            explanation = (
+                f"{student_name} presents a {tier_descriptions[tier]}. "
+                f"{driver_sentence}"
+                "Academic engagement and campus participation remain consistent. "
+                f"{protective_sentence}"
+                "No immediate action required. Standard wellness communications applicable."
+            )
+
+        return explanation.strip()
     
     # =========================================================================
     # MODEL PERSISTENCE

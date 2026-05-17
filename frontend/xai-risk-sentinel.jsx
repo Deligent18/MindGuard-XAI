@@ -859,9 +859,23 @@ function ClinicalDashboard({ user, onLogout }) {
                     border:`1px solid ${cfg.bg}25`,borderRadius:14,padding:20,flex:1}}>
                     <div style={{fontSize:12,fontWeight:700,color:cfg.bg,textTransform:"uppercase",
                       letterSpacing:1.5,marginBottom:12}}>XAI Explanation</div>
-                    <p style={{fontSize:13,color:"rgba(255,255,255,0.75)",lineHeight:1.65}}>
-                      {selected.explanation||"No explanation available for this student."}
-                    </p>
+                    {selected.explanation && selected.explanation.trim() ? (
+                      <p style={{fontSize:13,color:"rgba(255,255,255,0.75)",lineHeight:1.65}}>
+                        {selected.explanation}
+                      </p>
+                    ) : !mlReady ? (
+                      <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}>
+                        <div style={{width:13,height:13,border:"2px solid rgba(255,255,255,0.15)",
+                          borderTopColor:cfg.bg,borderRadius:"50%",animation:"spin 0.9s linear infinite",flexShrink:0}}/>
+                        <p style={{fontSize:12,color:"rgba(255,255,255,0.4)",fontStyle:"italic"}}>
+                          ML predictions computing — explanation will appear shortly.
+                        </p>
+                      </div>
+                    ) : (
+                      <p style={{fontSize:12,color:"rgba(255,255,255,0.35)",fontStyle:"italic"}}>
+                        No explanation generated for this student.
+                      </p>
+                    )}
                   </div>
                   <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",
                     borderRadius:14,padding:20}}>

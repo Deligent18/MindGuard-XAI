@@ -97,8 +97,8 @@ class DataService:
                         else 0.55 if str(row.get('risk_label','')).lower() == 'medium'
                         else 0.20,
                 "shap": [],
-                "explanation": "",
-                "intervention": [],
+                "explanation": f"ML predictions are being computed for {row.get('name', 'this student')}. Full SHAP-based explanation will appear shortly.",
+                "intervention": ["Full clinical recommendations will be available once ML predictions complete."],
                 "lastUpdated": "",
             }
             students.append(student)
