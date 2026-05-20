@@ -5,12 +5,11 @@ Hardcoded seed users are written to MySQL on first init.
 """
 
 import os
-from passlib.context import CryptContext
+import bcrypt as _bcrypt
 from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 SEED_USERS = [
     {"username": "counsellor1", "password": "Care@2026",    "name": "Dr. Sibanda, N.", "role": "counsellor", "roleLabel": "Mental Health Counsellor"},
@@ -21,9 +20,12 @@ SEED_USERS = [
 # In-memory store (always populated as fallback)
 _MEM: dict = {}
 
+def _hash(plain: str) -> str:
+    return _bcrypt.hashpw(plain.encode(), _bcrypt.gensalt()).decode()
+
 def _build_mem():
     for u in SEED_USERS:
-        _MEM[u["username"]] = {**u, "password": pwd_context.hash(u["password"]), "status": "Active", "last_login": None}
+        _MEM[u["username"]] = {**u, "password": _hash(u["password"]), "status": "Active", "last_login": None}
 
 _build_mem()
 
@@ -73,7 +75,7 @@ def _ensure_table():
                 c.execute(text("""
                     INSERT INTO system_users (username, password, name, role, role_label, status)
                     VALUES (:un, :pw, :nm, :rl, :rll, 'Active')
-                """), {"un": u["username"], "pw": pwd_context.hash(u["password"]),
+                """), {"un": u["username"], "pw": _hash(u["password"]),
                        "nm": u["name"], "rl": u["role"], "rll": u["roleLabel"]})
             print("db.py: Seeded default users into MySQL")
 
@@ -81,8 +83,11 @@ def init_db():
     _try_mysql()
     _ensure_table()
 
-def verify_password(plain, hashed):
-    return pwd_context.verify(plain, hashed)
+def verify_password(plain: str, hashed: str) -> bool:
+    try:
+        return _bcrypt.checkpw(plain.encode(), hashed.encode())
+    except Exception:
+        return False
 
 def get_user(username):
     if _USE_MYSQL and _engine:
@@ -114,7 +119,7 @@ def get_all_users():
              "last": u["last_login"] or "Never"} for u in _MEM.values()]
 
 def create_user(username, password, name, role, role_label):
-    hashed = pwd_context.hash(password)
+    hashed = _hash(password)
     if _USE_MYSQL and _engine:
         try:
             from sqlalchemy import text
