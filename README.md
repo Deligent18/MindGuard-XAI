@@ -20,6 +20,9 @@ A production-ready platform that predicts mental health risks among university s
 
 ## 🚀 Quick Start
 
+> **Ubuntu/Debian users:** Use `./backend/setup.sh` instead of `pip install -r requirements.txt` directly.
+
+
 ```bash
 # 1. Clone
 git clone https://github.com/Deligent18/MindGuard-XAI.git
