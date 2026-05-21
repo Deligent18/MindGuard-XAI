@@ -22,14 +22,25 @@ import threading
 load_dotenv()
 
 # Database (MySQL with in-memory fallback)
-from .db import (
-    init_db,
-    get_user,
-    get_all_users,
-    create_user as db_create_user,
-    touch_last_login,
-    verify_password as db_verify_password,
-)
+# Try relative import first (when running as a package), fall back to absolute
+try:
+    from .db import (
+        init_db,
+        get_user,
+        get_all_users,
+        create_user as db_create_user,
+        touch_last_login,
+        verify_password as db_verify_password,
+    )
+except ImportError:
+    from db import (
+        init_db,
+        get_user,
+        get_all_users,
+        create_user as db_create_user,
+        touch_last_login,
+        verify_password as db_verify_password,
+    )
 init_db()
 
 # Import ML Pipeline (optional - graceful degradation if not available)
