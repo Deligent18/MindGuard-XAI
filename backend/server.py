@@ -22,7 +22,14 @@ import threading
 load_dotenv()
 
 # Database (MySQL with in-memory fallback)
-from db import init_db, get_user, get_all_users, create_user as db_create_user, touch_last_login, verify_password as db_verify_password
+from .db import (
+    init_db,
+    get_user,
+    get_all_users,
+    create_user as db_create_user,
+    touch_last_login,
+    verify_password as db_verify_password,
+)
 init_db()
 
 # Import ML Pipeline (optional - graceful degradation if not available)
@@ -141,45 +148,15 @@ def _run_ml_predictions_background():
         risk_scores = probs[:, 2] + 0.5 * probs[:, 1]
         risk_scores = np.clip(risk_scores, 0, 1)
 
-        # ── Step 4: global SHAP feature importance ──────────────────────────
-        # NEVER use shap.TreeExplainer in CI — it deadlocks in daemon threads
-        # on Linux GitHub Actions runners regardless of OMP settings.
-        # Use model.feature_importances_ instead — instant and always safe.
+        # ── Step 4: per-student SHAP is deferred ─────────────────────────────
+        # The earlier implementation computed only a global feature-importance
+        # substitute to avoid SHAP deadlocks/OOM in daemon threads.
+        # To restore real per-student SHAP, we defer TreeExplainer work to
+        # on-demand requests (/students/{student_id}) for counsellor/admin.
+        #
+        # Here we keep a lightweight placeholder so the UI remains stable.
         global_shap = []
-        try:
-            fi     = pipeline.model.feature_importances_
-            max_fi = fi.max() or 1.0
-            global_shap = [
-                {"feature": f, "value": float(fi[i]),
-                 "importance": float(fi[i] / max_fi), "dir": 1}
-                for i, f in enumerate(pipeline.feature_names)
-                if i < len(fi)
-            ]
-            global_shap.sort(key=lambda x: x["value"], reverse=True)
-            global_shap = global_shap[:6]
-            print(f"[bg] Feature importance OK ({len(global_shap)} features, no SHAP deadlock risk)")
-        except Exception as fi_err:
-            print(f"[bg] Feature importance failed ({fi_err}) — using empty fallback")
-            global_shap = [{"feature": f, "value": 0.1, "importance": 1.0, "dir": 1}
-                           for f in pipeline.feature_names[:6]]
 
-        if not global_shap:
-            # Fallback: use model's built-in feature importance (never hangs)
-            try:
-                fi = pipeline.model.feature_importances_
-                max_fi = fi.max() or 1.0
-                global_shap = [
-                    {"feature": f, "value": float(fi[i]),
-                     "importance": float(fi[i] / max_fi), "dir": 1}
-                    for i, f in enumerate(pipeline.feature_names)
-                    if i < len(fi)
-                ]
-                global_shap.sort(key=lambda x: x["value"], reverse=True)
-                global_shap = global_shap[:6]
-                print(f"[bg] Using model feature_importances_ ({len(global_shap)} features)")
-            except Exception:
-                global_shap = [{"feature": f, "value": 0.1, "importance": 1.0, "dir": 1}
-                               for f in pipeline.feature_names[:6]]
 
         # ── Step 5: merge scores into student dicts ──────────────────────────
         enriched = []
@@ -635,14 +612,46 @@ async def batch_update_predictions(current_user: dict = Depends(get_current_user
 
 @app.get("/students/{student_id}")
 async def get_student(student_id: str, current_user: dict = Depends(get_current_user)):
-    """Get a specific student by ID — searches ML-enriched list if available"""
+    """Get a specific student by ID.
+
+    For counsellor/admin: if SHAP/explanation are missing, compute real per-student
+    SHAP on-demand (avoids startup-time TreeExplainer deadlocks/OOM).
+
+    Welfare: SHAP/explanation are stripped by `filter_student_by_role()`.
+    """
     source = TRAFFIC_STUDENTS if TRAFFIC_STUDENTS else STUDENTS
     student = next((s for s in source if s["id"] == student_id), None)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
     role = current_user["role"]
+
+    # Only counsellor/admin should receive SHAP/explanation.
+    if role in ["counsellor", "admin"]:
+        shap_missing = (not student.get("shap")) or (len(student.get("shap")) == 0)
+        explanation_missing = not student.get("explanation")
+        if shap_missing or explanation_missing:
+            if ML_PIPELINE_AVAILABLE:
+                try:
+                    # Compute full per-student prediction including SHAP + text.
+                    prediction = data_service.predict_single_student(student)
+                    student["risk"] = prediction.get("risk", student.get("risk"))
+                    student["tier"] = prediction.get("tier", student.get("tier"))
+                    student["shap"] = prediction.get("shap", student.get("shap", []))
+                    student["explanation"] = prediction.get("explanation", student.get("explanation", ""))
+                    student["intervention"] = prediction.get("intervention", student.get("intervention", []))
+                    student["lastUpdated"] = prediction.get("lastUpdated", student.get("lastUpdated", ""))
+
+                    await manager.broadcast({
+                        "type": "student_update",
+                        "data": filter_student_by_role(student, role)
+                    })
+                except Exception as e:
+                    # Keep response stable; do not fail the request.
+                    student["explanation"] = student.get("explanation") or "SHAP explanation pending due to computation error."
+
     return filter_student_by_role(student, role)
+
 
 @app.post("/students/{student_id}")
 async def update_student(

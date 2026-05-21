@@ -20,8 +20,24 @@ fi
 
 echo "Activating venv and installing dependencies..."
 source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+
+# Always use venv's pip/python to avoid PEP 668 (externally-managed-environment)
+./venv/bin/python -m pip install --upgrade pip
+
+# If requirements are hash-pinned (e.g., include --hash=...), pip may fail on hash mismatch.
+# Create a temp requirements file without hash directives.
+REQ_IN="requirements.txt"
+REQ_CLEAN="/tmp/requirements_clean.txt"
+
+if grep -q -- "--hash=" "${REQ_IN}"; then
+
+  echo "Hash-pins detected in requirements.txt; stripping --hash=... entries to avoid hash mismatch errors..."
+  sed -e 's/--hash=[^ ]\+ //g' -e 's/  *//g' "${REQ_IN}" > "${REQ_CLEAN}"
+  ./venv/bin/python -m pip install -r "${REQ_CLEAN}"
+else
+  ./venv/bin/python -m pip install -r "${REQ_IN}"
+fi
+
 
 echo ""
 echo "========================================"
