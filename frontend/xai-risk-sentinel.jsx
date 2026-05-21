@@ -570,6 +570,9 @@ function ClinicalDashboard({ user, onLogout }) {
   const [pipelineStatus,setPipelineStatus]=useState(null);
   const searchTimer = useRef(null);
   const listRef     = useRef(null);
+  const shapRequestInFlightRef = useRef(null);
+
+
 
   const fetchPage = useCallback(async (pg, filt, srch, replace=false) => {
     if (pg === 1) setLoading(true); else setLoadingMore(true);
@@ -601,6 +604,7 @@ function ClinicalDashboard({ user, onLogout }) {
   useEffect(() => {
     fetchPage(1, "all", "");
 
+
     // Fetch tier counts
     Promise.all([
       api.fetchStudents({page:1,limit:1,tier:"high"}),
@@ -614,32 +618,17 @@ function ClinicalDashboard({ user, onLogout }) {
       });
     });
 
-    // Poll /predictions-status until ML is ready, then auto-refresh
-    let pollInterval = null;
-    async function pollMlStatus() {
+    // Check initial pipeline status
+    (async () => {
       try {
-        const r = await api.fetchStudents({page:1,limit:1});
+        const r = await api.fetchStudents({ page: 1, limit: 1 });
         if (r.ml_ready) {
-          clearInterval(pollInterval);
-          setPipelineMsg("ML predictions ready — refreshing…");
+          setPipelineMsg("ML predictions ready");
           setPipelineStatus("done");
-          fetchPage(1, "all", "", true);
-          Promise.all([
-            api.fetchStudents({page:1,limit:1,tier:"high"}),
-            api.fetchStudents({page:1,limit:1,tier:"medium"}),
-            api.fetchStudents({page:1,limit:1,tier:"low"}),
-          ]).then(([h,m,l]) => {
-            setCounts({high:h.total||0,medium:m.total||0,low:l.total||0});
-          });
           setTimeout(()=>setPipelineStatus(null), 4000);
-        } else if (r.ml_ready === false) {
-          setPipelineMsg("Computing ML predictions in background…");
-          setPipelineStatus("running");
         }
       } catch {}
-    }
-    pollInterval = setInterval(pollMlStatus, 8000);
-    pollMlStatus();
+    })();
 
     // WebSocket real-time updates
     wsManager.connect();
@@ -648,12 +637,11 @@ function ClinicalDashboard({ user, onLogout }) {
       setSelected(prev => prev?.id===updated.id ? updated : prev);
     });
     wsManager.on("pipeline_completed", () => {
-      clearInterval(pollInterval);
       setPipelineStatus("done"); setPipelineMsg("Pipeline complete — predictions refreshed.");
       fetchPage(1, filter, search, true);
       setTimeout(()=>setPipelineStatus(null),4000);
     });
-    return () => { wsManager.disconnect(); clearInterval(pollInterval); };
+    return () => { wsManager.disconnect(); };
   }, []);
 
   // Filter / search change
@@ -678,6 +666,48 @@ function ClinicalDashboard({ user, onLogout }) {
 
   const cfg     = selected ? (TIER[selected.tier]||TIER.low) : TIER.low;
   const maxShap = selected?.shap ? Math.max(...selected.shap.map(s=>Math.abs(s.value||0)), 0.001) : 1;
+  // mlReady is true when pipeline is not actively running
+  const mlReady = pipelineStatus !== "running";
+
+  const needsOnDemandShap = !!selected && user && user.role !== "welfare" && (!selected.shap || selected.shap.length === 0);
+
+  // On-demand SHAP fetch for counsellor/admin
+  useEffect(() => {
+    if (!needsOnDemandShap) return;
+    if (!selected?.id) return;
+    const studentId = selected.id;
+
+    // Prevent duplicate in-flight requests per student
+    if (shapRequestInFlightRef.current?.id === studentId) return;
+    shapRequestInFlightRef.current = { id: studentId };
+
+    (async () => {
+      try {
+        const r = await api.predictStudent(studentId);
+        if (!r || !r.success) return;
+
+        const prediction = r.result?.prediction || r.result || {};
+        const mergedPatch = {
+          // Backend prediction already uses these keys
+          risk: prediction.risk,
+          tier: prediction.tier,
+          shap: prediction.shap,
+          explanation: prediction.explanation,
+          intervention: prediction.intervention,
+          lastUpdated: prediction.lastUpdated,
+        };
+
+        // Update sidebar students array
+        setStudents(prev => prev.map(s => s.id === studentId ? { ...s, ...mergedPatch } : s));
+        // Update selected panel
+        setSelected(prev => (prev?.id === studentId ? { ...prev, ...mergedPatch } : prev));
+      } catch (e) {
+        console.error("predictStudent error:", e);
+      } finally {
+        shapRequestInFlightRef.current = null;
+      }
+    })();
+  }, [needsOnDemandShap, selected?.id, user?.role]);
 
   if (loading) {
     return (
@@ -863,7 +893,7 @@ function ClinicalDashboard({ user, onLogout }) {
                       <p style={{fontSize:13,color:"rgba(255,255,255,0.75)",lineHeight:1.65}}>
                         {selected.explanation}
                       </p>
-                    ) : !mlReady ? (
+                    ) : pipelineStatus === "running" ? (
                       <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}>
                         <div style={{width:13,height:13,border:"2px solid rgba(255,255,255,0.15)",
                           borderTopColor:cfg.bg,borderRadius:"50%",animation:"spin 0.9s linear infinite",flexShrink:0}}/>
