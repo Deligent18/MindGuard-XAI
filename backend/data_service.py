@@ -10,8 +10,11 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 from fastapi import WebSocket
 
-# Import ML pipeline
-from ml_pipeline import pipeline, MLPipeline
+# Import ML pipeline (support both package and script execution)
+try:
+    from .ml_pipeline import pipeline, MLPipeline  # type: ignore
+except ImportError:
+    from ml_pipeline import pipeline, MLPipeline
 
 
 class DataService:
@@ -177,23 +180,49 @@ class DataService:
         return prediction
     
     def _to_ml_format(self, student: Dict) -> Dict:
-        """Convert student API format to ML pipeline format"""
-        gpa = student.get('gpa', [0, 0, 0])
-        
+        """Convert student API format to ML pipeline format.
+
+        Notes:
+        - The ML pipeline expects engineered feature inputs like:
+          gpa_sem1/2/3, attendance, lms_logins, facility_access,
+          library_visits, after_hours_wifi, assignment_submissions.
+        - In the API student dict, keys use camelCase in some places.
+          This method normalizes keys and provides safe defaults.
+        """
+        gpa = student.get('gpa', [0, 0, 0]) or [0, 0, 0]
+
+        def _num(v, default=0.0):
+            try:
+                if v is None or v == "":
+                    return default
+                return float(v)
+            except Exception:
+                return default
+
+        def _int(v, default=0):
+            try:
+                if v is None or v == "":
+                    return default
+                return int(v)
+            except Exception:
+                return default
+
         return {
             "student_id": student.get('id', ''),
             "name": student.get('name', ''),
             "programme": student.get('programme', ''),
-            "year": student.get('year', 1),
-            "gpa_sem1": float(gpa[0]) if len(gpa) > 0 else 0.0,
-            "gpa_sem2": float(gpa[1]) if len(gpa) > 1 else 0.0,
-            "gpa_sem3": float(gpa[2]) if len(gpa) > 2 else 0.0,
-            "attendance": student.get('attendance', 0),
-            "lms_logins": student.get('lmsLogins', 0),
-            "facility_access": student.get('facilityAccess', 0),
-            "library_visits": student.get('library_visits', 0),
-            "after_hours_wifi": student.get('after_hours_wifi', 0),
-            "assignment_submissions": student.get('assignment_submissions', 0),
+            "year": _int(student.get('year', 1), 1),
+
+            "gpa_sem1": _num(gpa[0]) if len(gpa) > 0 else 0.0,
+            "gpa_sem2": _num(gpa[1]) if len(gpa) > 1 else 0.0,
+            "gpa_sem3": _num(gpa[2]) if len(gpa) > 2 else 0.0,
+
+            "attendance": _int(student.get('attendance', 0), 0),
+            "lms_logins": _int(student.get('lmsLogins', student.get('lms_logins', 0)), 0),
+            "facility_access": _int(student.get('facilityAccess', student.get('facility_access', 0)), 0),
+            "library_visits": _int(student.get('library_visits', student.get('libraryVisits', 0)), 0),
+            "after_hours_wifi": _int(student.get('after_hours_wifi', student.get('afterHoursWifi', 0)), 0),
+            "assignment_submissions": _int(student.get('assignment_submissions', student.get('assignmentSubmissions', 0)), 0),
         }
     
     # =========================================================================

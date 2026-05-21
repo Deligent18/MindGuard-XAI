@@ -1,26 +1,12 @@
-# MindGuard-XAI Backend TODO
+# TODO (MindGuard-XAI)
 
-## Goal
-Restore **real per-student SHAP** explanations while keeping the FastAPI server responsive and avoiding SHAP-related deadlocks/OOM.
+## Current objective
+Restore real per-student SHAP explanations on-demand (fast server responses, avoid SHAP in daemon threads) and keep welfare role free from SHAP/explanation.
 
-## Implementation Steps
-- [ ] 1) Inspect current SHAP behavior in `backend/server.py` (background thread) and `backend/ml_pipeline.py` (how `predict_single()` generates SHAP).
-- [ ] 2) Add a safe SHAP mode for per-student explanations:
-  - [ ] Compute SHAP only on-demand (for `/students/{id}` and optionally a new batch endpoint), not for all 1200+ students at startup.
-  - [ ] Avoid SHAP inside daemon threads; move SHAP computation to a non-daemon worker (or run synchronously only for single-student requests with tight bounds).
-  - [ ] Ensure correct feature matrix (`X`) is used when calling `generate_shap_explanation()`. 
-
-- [ ] 3) Update API endpoints to support per-student SHAP refresh:
-  - [ ] Add/adjust endpoint(s) that trigger SHAP generation for a student or filtered set.
-  - [ ] Ensure role-based filtering still hides SHAP/explanation from welfare users.
-- [ ] 4) Keep existing fast CSV/risk tier load as-is.
-- [ ] 5) Update the front-end contract only if necessary (ideally keep response shape stable).
-- [ ] 6) Run backend locally and verify:
-  - [ ] `/students` returns quickly
-  - [ ] `/students/{id}` includes SHAP/explanation for counsellor/admin after SHAP generation is triggered
-  - [ ] `/predictions-status` remains responsive
-
-## Notes / Constraints
-- SHAP can deadlock/hang in certain environments when run inside daemon threads.
-- The current server uses a global feature-importance substitute to avoid those issues; we will replace that with safe, on-demand per-student SHAP.
+## Steps
+- [x] 1) Inspect and fix data->ML feature key mapping in `backend/data_service.py` so `pipeline.predict_single()` receives all required engineered-feature inputs.
+- [ ] 2) Ensure `POST /pipeline/predict/{student_id}` in `backend/server.py` returns and stores the exact prediction keys frontend merges: `risk`, `tier`, `shap`, `explanation`, `intervention`, `lastUpdated`.
+- [ ] 3) Enforce role-based shielding for welfare (no SHAP/explanation leaks) in the on-demand predict endpoint path.
+- [ ] 4) Run a local sanity test: call prediction endpoint and verify response contains non-empty `shap` for counsellor/admin.
+- [ ] 5) Verify UI integration: opening a student shows SHAP bars and explanation.
 

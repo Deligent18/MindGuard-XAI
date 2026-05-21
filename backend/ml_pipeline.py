@@ -58,8 +58,10 @@ except ImportError:
 # Configuration - Use parent directory paths
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data', 'processed')
+RAW_DATA_DIR = os.path.join(BASE_DIR, 'data')
 MODEL_DIR = os.path.join(BASE_DIR, 'models')
 REPORTS_DIR = os.path.join(BASE_DIR, 'reports')
+
 
 # Model paths
 XGBOOST_MODEL_PATH = os.path.join(MODEL_DIR, 'xgboost_model.pkl')
@@ -103,7 +105,11 @@ class MLPipeline:
             DataFrame with student data
         """
         if file_path is None:
-            file_path = os.path.join(DATA_DIR, "students.csv")
+            # Prefer processed dataset, but fall back to raw students.csv
+            processed_path = os.path.join(DATA_DIR, "students.csv")
+            raw_path = os.path.join(RAW_DATA_DIR, "students.csv")
+            file_path = processed_path if os.path.exists(processed_path) else raw_path
+
             
         if os.path.exists(file_path):
             df = pd.read_csv(file_path)
@@ -331,10 +337,13 @@ class MLPipeline:
         if save:
             self.save_model()
         
-        # SHAP analysis for feature importance
+        # SHAP analysis for feature importance (best-effort)
+        # Some environments may not support SHAP for this model/config.
         try:
-            explainer  = _get_shap().TreeExplainer(self.model)
+            _shap_mod = _get_shap()
+            explainer  = _shap_mod.TreeExplainer(self.model)
             shap_vals  = explainer.shap_values(X)
+
 
             # XGBoost multi-class returns ndarray shape (n_samples, n_features, n_classes)
             # or a list of (n_samples, n_features) arrays — handle both

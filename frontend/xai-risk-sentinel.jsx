@@ -804,27 +804,27 @@ function ClinicalDashboard({ user, onLogout }) {
             <div style={{animation:"slideIn 0.3s ease"}}>
 
               {/* Student header */}
-              <div style={{display:"flex",alignItems:"flex-start",gap:24,marginBottom:24}}>
+                  <div style={{display:"flex",alignItems:"flex-start",gap:24,marginBottom:24}}>
                 <div style={{width:56,height:56,borderRadius:16,
                   background:`linear-gradient(135deg,${cfg.bg}44,${cfg.bg}11)`,
                   border:`1px solid ${cfg.bg}44`,display:"flex",alignItems:"center",
                   justifyContent:"center",fontSize:20,fontWeight:800,color:cfg.bg,flexShrink:0,
                   fontFamily:"'Barlow Condensed',sans-serif"}}>
-                  {selected.name.split(" ").map(n=>n[0]).join("").slice(0,2)}
+                  {(selected?.name||"").split(" ").map(n=>n[0]).join("").slice(0,2)}
                 </div>
                 <div style={{flex:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
                     <h2 style={{fontSize:22,fontWeight:700,color:"#fff",
-                      fontFamily:"'Barlow Condensed',sans-serif"}}>{selected.name}</h2>
+                      fontFamily:"'Barlow Condensed',sans-serif"}}>{selected?.name || ""}</h2>
                     <span style={{padding:"3px 12px",borderRadius:20,fontSize:11,fontWeight:700,
                       background:cfg.light,color:cfg.bg,border:`1px solid ${cfg.bg}44`,
                       letterSpacing:0.5,textTransform:"uppercase"}}>{cfg.label}</span>
                   </div>
                   <div style={{fontSize:13,color:"rgba(255,255,255,0.45)",marginTop:4}}>
-                    {selected.id} · {selected.programme} · Year {selected.year}
+                    {selected?.id || ""} · {selected?.programme || ""} · Year {selected?.year ?? ""}
                   </div>
                   <div style={{fontSize:11,color:"rgba(255,255,255,0.25)",marginTop:2}}>
-                    Last updated: {selected.lastUpdated}
+                    Last updated: {selected?.lastUpdated || ""}
                   </div>
                 </div>
                 <RiskGauge value={selected.risk||0}/>
