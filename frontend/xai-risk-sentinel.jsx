@@ -874,7 +874,7 @@ function ClinicalDashboard({ user, onLogout }) {
                   ))}
                   {(!selected.shap||selected.shap.length===0)&&(
                     <p style={{fontSize:12,color:"rgba(255,255,255,0.3)",fontStyle:"italic"}}>
-                      No SHAP data available for this student.
+                      {user.role==="welfare"?"Risk factors available upon request from a Mental Health Counsellor.":"No SHAP data available for this student."}
                     </p>
                   )}
                   {user.role==="welfare"&&(
@@ -887,8 +887,26 @@ function ClinicalDashboard({ user, onLogout }) {
                 <div style={{display:"flex",flexDirection:"column",gap:16}}>
                   <div style={{background:`linear-gradient(135deg,${cfg.bg}0A,rgba(255,255,255,0.02))`,
                     border:`1px solid ${cfg.bg}25`,borderRadius:14,padding:20,flex:1}}>
-                    <div style={{fontSize:12,fontWeight:700,color:cfg.bg,textTransform:"uppercase",
-                      letterSpacing:1.5,marginBottom:12}}>XAI Explanation</div>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                      <div style={{fontSize:12,fontWeight:700,color:cfg.bg,textTransform:"uppercase",
+                        letterSpacing:1.5}}>XAI Explanation</div>
+                      {user.role==="counsellor"&&(
+                        <button onClick={async ()=>{
+                          if(!selected?.id) return;
+                          try{
+                            const r=await api.predictStudent(selected.id);
+                            if(r&&r.success){
+                              const pred=r.result?.prediction||r.result||{};
+                              const merged={risk:pred.risk,tier:pred.tier,shap:pred.shap,explanation:pred.explanation,intervention:pred.intervention,lastUpdated:pred.lastUpdated};
+                              setStudents(p=>p.map(s=>s.id===selected.id?{...s,...merged}:s));
+                              setSelected(p=>p?.id===selected.id?{...p,...merged}:p);
+                            }
+                          }catch(e){console.error("Refresh SHAP:",e);}
+                        }} style={{padding:"4px 10px",fontSize:10,fontWeight:600,borderRadius:6,border:"1px solid "+cfg.bg+"33",background:cfg.bg+"11",color:cfg.bg,cursor:"pointer",transition:"all 0.2s"}}>
+                          ↻ Refresh
+                        </button>
+                      )}
+                    </div>
                     {selected.explanation && selected.explanation.trim() ? (
                       <p style={{fontSize:13,color:"rgba(255,255,255,0.75)",lineHeight:1.65}}>
                         {selected.explanation}
@@ -901,6 +919,10 @@ function ClinicalDashboard({ user, onLogout }) {
                           ML predictions computing — explanation will appear shortly.
                         </p>
                       </div>
+                    ) : user.role==="welfare" ? (
+                      <p style={{fontSize:12,color:"rgba(255,255,255,0.35)",fontStyle:"italic"}}>
+                        Risk summary available. Contact a Mental Health Counsellor for full SHAP explanations and clinical recommendations.
+                      </p>
                     ) : (
                       <p style={{fontSize:12,color:"rgba(255,255,255,0.35)",fontStyle:"italic"}}>
                         No explanation generated for this student.

@@ -646,20 +646,30 @@ async def get_student(student_id: str, current_user: dict = Depends(get_current_
                 try:
                     # Compute full per-student prediction including SHAP + text.
                     prediction = data_service.predict_single_student(student)
-                    student["risk"] = prediction.get("risk", student.get("risk"))
-                    student["tier"] = prediction.get("tier", student.get("tier"))
-                    student["shap"] = prediction.get("shap", student.get("shap", []))
-                    student["explanation"] = prediction.get("explanation", student.get("explanation", ""))
-                    student["intervention"] = prediction.get("intervention", student.get("intervention", []))
-                    student["lastUpdated"] = prediction.get("lastUpdated", student.get("lastUpdated", ""))
-
-                    await manager.broadcast({
-                        "type": "student_update",
-                        "data": filter_student_by_role(student, role)
-                    })
+                    if prediction and prediction.get("shap"):
+                        # Only update if we got real SHAP data back
+                        student["risk"] = prediction.get("risk", student.get("risk"))
+                        student["tier"] = prediction.get("tier", student.get("tier"))
+                        student["shap"] = prediction.get("shap")
+                        student["explanation"] = prediction.get("explanation", student.get("explanation", ""))
+                        student["intervention"] = prediction.get("intervention", student.get("intervention", []))
+                        student["lastUpdated"] = prediction.get("lastUpdated", student.get("lastUpdated", ""))
+                        await manager.broadcast({
+                            "type": "student_update",
+                            "data": filter_student_by_role(student, role)
+                        })
+                    else:
+                        # SHAP computation returned empty — use global feature importance as fallback
+                        if hasattr(pipeline, 'get_global_feature_importance'):
+                            global_shap = pipeline.get_global_feature_importance()
+                            if global_shap:
+                                student["shap"] = global_shap
+                                student["explanation"] = "SHAP computation completed using global feature importance as fallback."
                 except Exception as e:
                     # Keep response stable; do not fail the request.
+                    print(f"[SHAP on-demand] Error for {student_id}: {e}")
                     student["explanation"] = student.get("explanation") or "SHAP explanation pending due to computation error."
+
 
     return filter_student_by_role(student, role)
 

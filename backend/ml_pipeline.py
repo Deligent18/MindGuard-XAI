@@ -802,6 +802,41 @@ class MLPipeline:
     # PIPELINE STATUS
     # =========================================================================
     
+    def get_global_feature_importance(self) -> List[Dict[str, Any]]:
+        """
+        Get global feature importance from trained model.
+        Used as fallback when per-student SHAP generation fails.
+        
+        Returns:
+            List of {feature, value, dir, importance} dicts sorted by importance
+        """
+        if not self.is_trained or not hasattr(self.model, 'feature_importances_'):
+            return []
+        
+        try:
+            importances = self.model.feature_importances_
+            feature_names = self.feature_names if self.feature_names else []
+            
+            if not feature_names or len(feature_names) != len(importances):
+                return []
+            
+            # Create dicts with formatted feature names
+            features_with_importance = [
+                {
+                    "feature": self._format_feature_name(name),
+                    "value": float(imp),
+                    "dir": 1,  # Positive direction for global importance
+                    "importance": float(imp)
+                }
+                for name, imp in zip(feature_names, importances)
+            ]
+            
+            # Sort by importance descending, return top 8
+            return sorted(features_with_importance, key=lambda x: x["importance"], reverse=True)[:8]
+        except Exception as e:
+            print(f"[get_global_feature_importance] Error: {e}")
+            return []
+
     def get_status(self) -> Dict[str, Any]:
         """Get current pipeline status"""
         return {
