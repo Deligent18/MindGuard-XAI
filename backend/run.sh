@@ -10,19 +10,25 @@ fi
 source venv/bin/activate
 echo "Starting MindGuard-XAI backend on http://localhost:8000"
 
-# server.py uses relative imports (e.g. `from .db import ...`), so we must ensure
-# Python treats `backend/` as a package. To do that deterministically, set
-# PYTHONPATH to the repository root (one level above this script's directory)
-# and import via `backend.server:app`.
+# server.py uses relative imports (e.g. `from .db import ...`), so ensure the
+# repo root is on PYTHONPATH and import the app via `backend.server:app`.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="$REPO_ROOT:$PYTHONPATH"
 
+APP_IMPORT_TARGET="backend.server:app"
+HOST="0.0.0.0"
+PORT="8000"
+
+# Ensure uvicorn is always launched in a way that preserves package context.
+# From within backend/: importing `backend.server:app` requires PYTHONPATH=repo root.
 if [ -f "venv/bin/uvicorn" ]; then
-  ./venv/bin/uvicorn backend.server:app --reload --host 0.0.0.0 --port 8000
+  exec ./venv/bin/uvicorn "$APP_IMPORT_TARGET" --reload --host "$HOST" --port "$PORT"
 else
   # Fallback: run uvicorn as a module using the venv python
-  venv/bin/python -m uvicorn backend.server:app --reload --host 0.0.0.0 --port 8000
+  exec venv/bin/python -m uvicorn "$APP_IMPORT_TARGET" --reload --host "$HOST" --port "$PORT"
 fi
+
+
 
 
 

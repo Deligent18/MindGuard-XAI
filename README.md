@@ -47,7 +47,7 @@ Open **http://localhost:3000**
 | Student Welfare Officer | `welfare1` | `Welfare@2026` |
 | System Administrator | `admin` | `Admin@2026` |
 
-## 🛠 Tech Stack
+## 🛠 Tech StackStack
 
 | Layer | Technology |
 |-------|-----------|

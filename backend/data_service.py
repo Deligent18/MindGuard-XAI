@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Any
 from fastapi import WebSocket
 
 # Import ML pipeline
-from ml_pipeline import pipeline, MLPipeline
+from .ml_pipeline import pipeline, MLPipeline
 
 
 class DataService:
@@ -97,6 +97,7 @@ class DataService:
                         else 0.55 if str(row.get('risk_label','')).lower() == 'medium'
                         else 0.20,
                 "shap": [],
+                "lime": [],
                 "explanation": f"ML predictions are being computed for {row.get('name', 'this student')}. Full SHAP-based explanation will appear shortly.",
                 "intervention": ["Full clinical recommendations will be available once ML predictions complete."],
                 "lastUpdated": "",
@@ -149,6 +150,7 @@ class DataService:
                 "lmsLogins": student.get('lmsLogins', 0),
                 "facilityAccess": student.get('facilityAccess', 0),
                 "shap": prediction.get('shap', []),
+                "lime": prediction.get('lime', []),
                 "explanation": prediction.get('explanation', ''),
                 "intervention": prediction.get('intervention', []),
                 "lastUpdated": prediction.get('lastUpdated', '')
