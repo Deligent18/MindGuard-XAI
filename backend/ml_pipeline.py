@@ -23,6 +23,16 @@ def _get_shap():
         shap = _shap
     return shap
 
+# lime is imported lazily to avoid startup blocking
+_lime = None
+def _get_lime():
+    global _lime
+    if _lime is None:
+        import lime as _lime_mod
+        _lime = _lime_mod
+    return _lime
+
+
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -103,15 +113,21 @@ class MLPipeline:
             DataFrame with student data
         """
         if file_path is None:
-            file_path = os.path.join(DATA_DIR, "students.csv")
-            
-        if os.path.exists(file_path):
+            possible_paths = [
+                os.path.join(DATA_DIR, "students.csv"),
+                os.path.join(BASE_DIR, "backend", "data", "students.csv"),
+                os.path.join(BASE_DIR, "data", "processed", "students.csv"),
+                os.path.join(BASE_DIR, "data", "raw", "uci_higher_education.csv"),
+            ]
+            file_path = next((p for p in possible_paths if os.path.exists(p)), None)
+
+        if file_path is not None and os.path.exists(file_path):
             df = pd.read_csv(file_path)
             print(f"Loaded {len(df)} records from {file_path}")
         else:
             # Return empty DataFrame with expected columns
             df = pd.DataFrame()
-            print(f"Warning: File {file_path} not found. Using empty dataset.")
+            print(f"Warning: File {file_path or 'unknown'} not found. Using empty dataset.")
             
         return df
     
@@ -473,8 +489,9 @@ class MLPipeline:
     
     def predict_single(self, student_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Predict risk for a single student with SHAP explanations.
+        Predict risk for a single student with SHAP and (optionally) LIME explanations.
         """
+
         if not self.is_trained:
             if not self.load_model():
                 raise ValueError("Model not trained")
@@ -482,7 +499,25 @@ class MLPipeline:
         # Convert to DataFrame and engineer features — same path as batch predict
         df = pd.DataFrame([student_data])
         df = self.engineer_features(df)
+
+        # Cache engineered feature matrix for LIME background on first call
+        # (best-effort; if unavailable, we can still fall back to the current sample)
+        if getattr(self, "_X_train_for_lime", None) is None:
+            try:
+                df_train = self.load_data()
+                if df_train is not None and not df_train.empty:
+                    df_train = self.engineer_features(df_train)
+                    self._X_train_for_lime = self.prepare_features(df_train)
+                else:
+                    self._X_train_for_lime = None
+            except Exception:
+                self._X_train_for_lime = None
+
         X  = self.prepare_features(df)   # numeric feature matrix only
+
+        if getattr(self, "_X_train_for_lime", None) is None and X is not None and len(X) > 0:
+            self._X_train_for_lime = X
+
 
         # Predict
         predictions  = self.model.predict(X)
@@ -495,23 +530,115 @@ class MLPipeline:
 
         # Generate SHAP on the correct feature matrix X
         shap_explanation = self.generate_shap_explanation(X, student_data)
+
+        # Generate LIME (best-effort; may be skipped if unavailable)
+        lime_explanation = self.generate_lime_explanation(X, student_data)
+
         intervention     = self.generate_intervention(tier, shap_explanation)
         explanation      = self.generate_explanation_text(student_data, shap_explanation, tier)
 
         return {
-            "risk":        risk_score,
-            "tier":        tier,
-            "shap":        shap_explanation,
-            "explanation": explanation,
-            "intervention":intervention,
-            "lastUpdated": datetime.now().strftime("%Y-%m-%d"),
+            "risk":         risk_score,
+            "tier":         tier,
+            "shap":         shap_explanation,
+            "lime":         lime_explanation,
+            "explanation":  explanation,
+            "intervention": intervention,
+            "lastUpdated":  datetime.now().strftime("%Y-%m-%d"),
         }
+
+
+    # =========================================================================
+    # LIME EXPLANATIONS
+    # =========================================================================
+
+    def _get_lime_explainer(self, X_train: Optional[pd.DataFrame] = None):
+        """Create a LIME explainer lazily. Returns None if unavailable."""
+        if not self.is_trained:
+            return None
+
+        try:
+            # If training data isn't available, we still can try with current feature matrix
+            # but LIME is most meaningful with a background distribution.
+            if X_train is None:
+                return None
+
+            lime_mod = _get_lime()
+            # LIME tabular expects numpy arrays
+            return lime_mod.lime_tabular.LimeTabularExplainer(
+                training_data=X_train.values,
+                feature_names=list(X_train.columns),
+                class_names=["Low Risk", "Medium Risk", "High Risk"],
+                mode="classification",
+                discretize_continuous=True,
+                verbose=False,
+            )
+        except Exception as e:
+            print(f"[LIME] Failed to initialize explainer: {e}")
+            return None
+
+    def generate_lime_explanation(self, X: pd.DataFrame, original_data: Dict = None) -> List[Dict]:
+        """Generate LIME explanations (best-effort)."""
+        if not self.is_trained or X is None or len(X) == 0:
+            return []
+
+        # best-effort: if we don't have X_train cached, fallback to no explanation
+        X_train = getattr(self, "_X_train_for_lime", None)
+        if X_train is None:
+            return []
+
+        try:
+            explainer = self._get_lime_explainer(X_train)
+            if explainer is None:
+                return []
+
+            predict_fn = lambda data: self.model.predict_proba(data)
+
+            # Pick the highest-risk class index from predicted probabilities
+            proba = self.model.predict_proba(X.iloc[[0]])[0]
+            pred_class = int(np.argmax(proba))
+
+            exp = explainer.explain_instance(
+                data_row=X.iloc[0].values,
+                predict_fn=predict_fn,
+                num_features=min(10, len(self.feature_names)),
+                labels=[pred_class],
+            )
+
+            label_for_explanation = pred_class
+
+            lime_exps = []
+            # as_list(label=...) returns [("feature <= x", weight), ...]
+            for feature_str, weight in exp.as_list(label=label_for_explanation):
+                feat_name = feature_str.split(' ')[0].strip()
+
+                # Only include known engineered feature names
+                if feat_name not in list(X.columns):
+                    continue
+
+                lime_exps.append({
+                    "feature": self._format_feature_name(feat_name, original_data),
+                    "value": float(weight),
+                    "importance": float(abs(weight)),
+                    "dir": 1 if weight > 0 else -1,
+                    "method": "LIME",
+                    "direction_text": "↑ increases risk" if weight > 0 else "↓ decreases risk",
+                    "contribution_percent": None,
+                })
+
+            lime_exps.sort(key=lambda x: abs(x.get("value", 0.0)), reverse=True)
+            # Top 10 drivers
+            return lime_exps[:10]
+        except Exception as e:
+            print(f"[LIME] Error generating explanation: {e}")
+            return []
 
     # =========================================================================
     # SHAP EXPLANATIONS
     # =========================================================================
 
     def generate_shap_explanation(self, X: pd.DataFrame, original_data: Dict = None) -> List[Dict]:
+
         """Generate SHAP explanations. Handles XGBoost multi-class output shapes."""
         if not self.is_trained or len(X) == 0:
             return []
@@ -551,8 +678,19 @@ class MLPipeline:
                     "feature_value": float(feature_values.get(feature, 0)),
                 })
 
+            # Normalize and enrich output before sorting
+            # max_abs already computed above
+            for ex in explanations:
+                raw = float(ex.get("value", 0.0))
+                # importance is already abs(raw)/max_abs but keep explicit percent
+                ex["value"] = round(raw, 4)
+                ex["contribution_percent"] = round(float(ex.get("importance", 0.0)) * 100.0, 1)
+                ex["direction_text"] = "increases risk" if ex.get("dir", 1) > 0 else "decreases risk"
+
             explanations.sort(key=lambda x: abs(x["value"]), reverse=True)
-            return explanations[:6]
+            # Return more drivers for richer counsellor explanations
+            return explanations[:10]
+
 
         except Exception as e:
             print(f"[SHAP] Error: {e}")
@@ -622,69 +760,71 @@ class MLPipeline:
         return interventions.get(tier, interventions['low'])
     
     def generate_explanation_text(self, data: Dict, shap_values: List[Dict], tier: str) -> str:
-        """
-        Generate a human-readable XAI explanation using the actual top SHAP
-        feature drivers computed for this specific student.
-        """
+        """Generate a richer XAI explanation using per-student SHAP drivers."""
         tier_descriptions = {
-            'high':   "critical risk profile",
-            'medium': "moderate risk profile",
-            'low':    "low risk profile",
+            "high": "critical risk profile",
+            "medium": "moderate risk profile",
+            "low": "low risk profile",
         }
 
-        student_name = data.get('name', 'This student')
+        student_name = data.get("name", "This student")
+        risk_prob = data.get("risk", None)
+        risk_line = f"({risk_prob * 100:.1f}% probability)" if isinstance(risk_prob, (int, float)) else ""
 
-        # Top risk-increasing SHAP features (positive contribution)
         risk_drivers = sorted(
-            [s for s in shap_values if s.get('dir', 1) > 0 and abs(s.get('value', 0)) > 0.01],
-            key=lambda x: abs(x.get('value', 0)), reverse=True
+            [s for s in shap_values if s.get("dir", 1) > 0],
+            key=lambda x: abs(x.get("value", 0.0)),
+            reverse=True,
         )
-
-        # Top protective SHAP features (negative contribution)
         protective = sorted(
-            [s for s in shap_values if s.get('dir', 1) < 0 and abs(s.get('value', 0)) > 0.01],
-            key=lambda x: abs(x.get('value', 0)), reverse=True
+            [s for s in shap_values if s.get("dir", 1) < 0],
+            key=lambda x: abs(x.get("value", 0.0)),
+            reverse=True,
         )
 
-        # Build driver sentence from top 2 SHAP features
-        top_factors = [d.get('feature', '').lower() for d in risk_drivers[:2] if d.get('feature')]
-        if len(top_factors) >= 2:
-            driver_sentence = f"The primary drivers are {top_factors[0]} and {top_factors[1]}. "
-        elif len(top_factors) == 1:
-            driver_sentence = f"The primary driver is {top_factors[0]}. "
-        else:
-            driver_sentence = ""
+        def fmt_driver(driver: Dict) -> str:
+            feature = (driver.get("feature") or "").strip()
+            pct = driver.get("contribution_percent")
+            feature_value = driver.get("feature_value")
 
-        # Build protective sentence
-        prot_feat = protective[0].get('feature', '').lower() if protective else ""
-        protective_sentence = f"A positive factor is {prot_feat}. " if prot_feat else ""
+            parts = [feature or "Unnamed factor"]
+            if pct is not None:
+                parts.append(f"{pct:.1f}% impact")
+            if feature_value is not None:
+                parts.append(f"value {feature_value}")
+            return " · ".join(parts)
 
-        if tier == 'high':
-            explanation = (
-                f"{student_name} shows a {tier_descriptions[tier]}. "
-                f"{driver_sentence}"
-                "The combination of these signals indicates an acute crisis state requiring urgent attention. "
-                f"{protective_sentence}"
-                "Immediate counsellor contact is strongly recommended."
+        main_risks = risk_drivers[:3]
+        main_protective = protective[:2]
+
+        if tier == "high":
+            recommendation = (
+                "Immediate counsellor contact is strongly recommended. "
+                "Prioritise safety assessment, same-day follow-up, and a targeted support plan."
             )
-        elif tier == 'medium':
-            explanation = (
-                f"{student_name} shows a {tier_descriptions[tier]}. "
-                f"{driver_sentence}"
-                "This pattern suggests emerging distress over the past 4-6 weeks. "
-                f"{protective_sentence}"
-                "Proactive outreach and academic support referral are recommended."
+        elif tier == "medium":
+            recommendation = (
+                "Proactive welfare outreach is recommended. "
+                "Focus on early intervention, academic support referral, and monitoring over the next 2–4 weeks."
             )
         else:
-            explanation = (
-                f"{student_name} presents a {tier_descriptions[tier]}. "
-                f"{driver_sentence}"
-                "Academic engagement and campus participation remain consistent. "
-                f"{protective_sentence}"
-                "No immediate action required. Standard wellness communications applicable."
+            recommendation = (
+                "Continue standard wellness monitoring. "
+                "Provide supportive resources and confirm that engagement indicators remain stable."
             )
 
-        return explanation.strip()
+        risk_lines = "\n".join(f"- {fmt_driver(driver)}" for driver in main_risks) or "- No strong risk-increasing drivers detected."
+        protective_lines = "\n".join(f"- {fmt_driver(driver)}" for driver in main_protective) or "- No strong protective factors detected."
+
+        return (
+            f"{student_name} shows a {tier_descriptions.get(tier, tier)} {risk_line}.\n\n"
+            "Main risk drivers (SHAP):\n"
+            f"{risk_lines}\n\n"
+            "Protective factors (SHAP):\n"
+            f"{protective_lines}\n\n"
+            f"Clinical recommendation:\n{recommendation}"
+        ).strip()
+
     
     # =========================================================================
     # MODEL PERSISTENCE

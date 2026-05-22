@@ -63,20 +63,60 @@ function RiskGauge({ value }) {
   );
 }
 
-function ShapBar({ feature, value, dir, maxVal }) {
-  const pct   = Math.abs(value) / maxVal * 100;
+function ShapBar({ feature, value, dir, maxVal, contributionPercent, featureValue, directionText }) { 
+
+  const pct = Math.max(4, Math.min(100, (Math.abs(value) / maxVal) * 100));
   const color = dir > 0 ? "#FF3B30" : "#30D158";
   return (
-    <div style={{marginBottom:10}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-        <span style={{fontSize:12,color:"rgba(255,255,255,0.75)",maxWidth:"75%"}}>{feature}</span>
-        <span style={{fontSize:12,fontWeight:700,color,fontFamily:"'Barlow Condensed',sans-serif"}}>
-          {dir>0?"+":""}{value.toFixed(3)}
-        </span>
+    <div style={{marginBottom:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",gap:12,marginBottom:4}}>
+        <div style={{minWidth:0,flex:1}}>
+          <div style={{fontSize:12,color:"rgba(255,255,255,0.82)",lineHeight:1.35}}>{feature}</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.35)",marginTop:2,display:"flex",gap:8,flexWrap:"wrap"}}>
+            {featureValue !== undefined && <span>Value: {featureValue}</span>}
+            {directionText && <span>{directionText}</span>}
+          </div>
+        </div>
+        <div style={{textAlign:"right",flexShrink:0}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#fff",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            {dir > 0 ? "+" : ""}{Number(value || 0).toFixed(4)}
+          </div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.45)"}}>
+            {contributionPercent !== undefined ? `${Number(contributionPercent).toFixed(1)}%` : ""}
+          </div>
+        </div>
       </div>
-      <div style={{height:6,background:"rgba(255,255,255,0.06)",borderRadius:3,overflow:"hidden"}}>
-        <div style={{height:"100%",width:`${pct}%`,background:color,borderRadius:3,boxShadow:`0 0 6px ${color}`,transition:"width 0.5s"}}/>
+      <div style={{height:7,background:"rgba(255,255,255,0.06)",borderRadius:999,overflow:"hidden"}}>
+        <div style={{height:"100%",width:`${pct}%`,background:color,borderRadius:999,boxShadow:`0 0 6px ${color}`,transition:"width 0.5s"}}/>
       </div>
+    </div>
+  );
+}
+
+function LimeBar({ feature, value, dir, maxVal }) {
+  const pct = Math.max(4, Math.min(100, (Math.abs(value) / maxVal) * 100));
+  const color = dir > 0 ? "#FF9500" : "#30D158";
+  return (
+    <div style={{marginBottom:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",gap:12,marginBottom:4}}>
+        <div style={{minWidth:0,flex:1}}>
+          <div style={{fontSize:12,color:"rgba(255,255,255,0.82)",lineHeight:1.35}}>{feature}</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.35)",marginTop:2}}>
+            LIME local contribution
+          </div>
+        </div>
+        <div style={{textAlign:"right",flexShrink:0}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#fff",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            {dir > 0 ? "+" : ""}{Number(value || 0).toFixed(4)}
+          </div>
+        </div>
+      </div>
+      <div style={{height:7,background:"rgba(255,255,255,0.06)",borderRadius:999,overflow:"hidden"}}>
+        <div
+          style={{height:"100%",width:`${pct}%`,background:color,borderRadius:999,boxShadow:`0 0 6px ${color}`,transition:"width 0.5s"}}
+        />
+      </div>
+      <div style={{fontSize:10,color:"rgba(255,255,255,0.45)",marginTop:4}}>LIME</div>
     </div>
   );
 }
@@ -562,12 +602,14 @@ function ClinicalDashboard({ user, onLogout }) {
   const [search,      setSearch]      = useState("");
   const [loading,     setLoading]     = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [page,        setPage]        = useState(1);
   const [totalPages,  setTotalPages]  = useState(1);
   const [total,       setTotal]       = useState(0);
   const [counts,      setCounts]      = useState({high:0,medium:0,low:0});
   const [pipelineMsg, setPipelineMsg] = useState("");
   const [pipelineStatus,setPipelineStatus]=useState(null);
+  const [xaiView, setXaiView] = useState("shap");
   const searchTimer = useRef(null);
   const listRef     = useRef(null);
 
@@ -656,6 +698,22 @@ function ClinicalDashboard({ user, onLogout }) {
     return () => { wsManager.disconnect(); clearInterval(pollInterval); };
   }, []);
 
+  useEffect(() => {
+    if (!selected?.id) return;
+    let cancelled = false;
+    setDetailLoading(true);
+    api.fetchStudent(selected.id)
+      .then(r => {
+        if (cancelled || !r.success || !r.student) return;
+        setStudents(prev => prev.map(s => s.id === r.student.id ? r.student : s));
+        setSelected(r.student);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [selected?.id]);
+
   // Filter / search change
   useEffect(() => {
     setPage(1);
@@ -678,6 +736,8 @@ function ClinicalDashboard({ user, onLogout }) {
 
   const cfg     = selected ? (TIER[selected.tier]||TIER.low) : TIER.low;
   const maxShap = selected?.shap ? Math.max(...selected.shap.map(s=>Math.abs(s.value||0)), 0.001) : 1;
+  const maxLime = selected?.lime ? Math.max(...selected.lime.map(s=>Math.abs(s.value||0)), 0.001) : 1;
+  const mlReady = Boolean(selected?.shap?.length || pipelineStatus === "done");
 
   if (loading) {
     return (
@@ -828,26 +888,82 @@ function ClinicalDashboard({ user, onLogout }) {
                 ))}
               </div>
 
-              {/* SHAP + Explanation */}
+              {/* SHAP / LIME toggle + Explanation */}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,marginBottom:8}}>
+                <div style={{display:"flex",gap:8}}>
+                  {[
+                    {id:"shap",label:"SHAP"},
+                    {id:"lime",label:"LIME"},
+                    {id:"combined",label:"Combined"},
+                  ].map(b => (
+                    <button key={b.id}
+                      onClick={()=>setXaiView(b.id)}
+                      style={{padding:"8px 12px",borderRadius:10,border:"1px solid rgba(255,255,255,0.08)",cursor:"pointer",
+                        background: xaiView===b.id ? "rgba(255,255,255,0.04)" : "transparent",
+                        color: xaiView===b.id ? "#fff" : "rgba(255,255,255,0.45)", fontWeight:700, fontSize:12}}
+                    >{b.label}</button>
+                  ))}
+                </div>
+                <div style={{fontSize:12,color:"rgba(255,255,255,0.45)"}}>View: {xaiView.toUpperCase()}</div>
+              </div>
+
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
                 <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",
-                  borderRadius:14,padding:20}}>
+                  borderRadius:14,padding:20,maxHeight:420,overflowY:"auto"}}>
                   <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.5)",
                     textTransform:"uppercase",letterSpacing:1.5,marginBottom:16}}>
                     {user.role==="counsellor"?"SHAP Feature Contributions":"Top Risk Factors"}
                   </div>
-                  {(selected.shap||[])
-                    .filter(s=>user.role==="counsellor"||s.dir>0)
-                    .slice(0, user.role==="counsellor"?undefined:3)
-                    .map((s,i)=>(
-                    <ShapBar key={i} feature={s.feature} value={s.value||0} dir={s.dir||1} maxVal={maxShap}/>
-                  ))}
-                  {(!selected.shap||selected.shap.length===0)&&(
+                  {xaiView === "shap" && (
+                    (selected.shap||[])
+                      .filter(s => user.role === "counsellor" || s.dir > 0)
+                      .slice(0, user.role === "counsellor" ? 10 : 3)
+                      .map((s,i)=> (
+                        <ShapBar
+                          key={i}
+                          feature={s.feature}
+                          value={s.value||0}
+                          dir={s.dir||1}
+                          maxVal={maxShap}
+                          contributionPercent={s.contribution_percent}
+                          featureValue={s.feature_value}
+                          directionText={s.direction_text}
+                        />
+                      ))
+                  )}
+
+                  {xaiView === "lime" && (
+                    (selected.lime||[])
+                      .slice(0, user.role === "counsellor" ? 10 : 5)
+                      .map((l,i)=> (
+                        <LimeBar key={i} feature={l.feature} value={l.value||0} dir={l.dir||1} maxVal={maxLime} />
+                      ))
+                  )}
+
+                  {xaiView === "combined" && (
+                    <div>
+                      {(selected.shap||[])
+                        .filter(s => user.role === "counsellor" || s.dir > 0)
+                        .slice(0, user.role === "counsellor" ? 6 : 3)
+                        .map((s,i)=> (
+                          <ShapBar key={`s-${i}`} feature={s.feature} value={s.value||0} dir={s.dir||1} maxVal={maxShap}
+                            contributionPercent={s.contribution_percent} featureValue={s.feature_value} directionText={s.direction_text} />
+                        ))}
+
+                      <div style={{height:12}} />
+                      <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",marginBottom:8}}>LIME local contributions</div>
+                      {(selected.lime||[]).slice(0,6).map((l,i)=> (
+                        <LimeBar key={`l-${i}`} feature={l.feature} value={l.value||0} dir={l.dir||1} maxVal={maxLime} />
+                      ))}
+                    </div>
+                  )}
+
+                  {((xaiView === "shap" && (!selected.shap||selected.shap.length===0)) || (xaiView === "lime" && (!selected.lime||selected.lime.length===0))) && (
                     <p style={{fontSize:12,color:"rgba(255,255,255,0.3)",fontStyle:"italic"}}>
-                      No SHAP data available for this student.
+                      No XAI data available for this student.
                     </p>
                   )}
-                  {user.role==="welfare"&&(
+                  {user.role==="welfare"&& xaiView!=='lime' && (
                     <div style={{fontSize:11,color:"rgba(255,255,255,0.25)",marginTop:10,fontStyle:"italic"}}>
                       Full SHAP values visible to Mental Health Counsellors only.
                     </div>
@@ -863,6 +979,14 @@ function ClinicalDashboard({ user, onLogout }) {
                       <p style={{fontSize:13,color:"rgba(255,255,255,0.75)",lineHeight:1.65}}>
                         {selected.explanation}
                       </p>
+                    ) : detailLoading ? (
+                      <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}>
+                        <div style={{width:13,height:13,border:"2px solid rgba(255,255,255,0.15)",
+                          borderTopColor:cfg.bg,borderRadius:"50%",animation:"spin 0.9s linear infinite",flexShrink:0}}/>
+                        <p style={{fontSize:12,color:"rgba(255,255,255,0.4)",fontStyle:"italic"}}>
+                          Loading detailed explanation…
+                        </p>
+                      </div>
                     ) : !mlReady ? (
                       <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}>
                         <div style={{width:13,height:13,border:"2px solid rgba(255,255,255,0.15)",

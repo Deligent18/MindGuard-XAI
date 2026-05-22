@@ -1,26 +1,12 @@
-# MindGuard-XAI Backend TODO
+# TODO — LIME integration for MindGuard-XAI
 
-## Goal
-Restore **real per-student SHAP** explanations while keeping the FastAPI server responsive and avoiding SHAP-related deadlocks/OOM.
-
-## Implementation Steps
-- [ ] 1) Inspect current SHAP behavior in `backend/server.py` (background thread) and `backend/ml_pipeline.py` (how `predict_single()` generates SHAP).
-- [ ] 2) Add a safe SHAP mode for per-student explanations:
-  - [ ] Compute SHAP only on-demand (for `/students/{id}` and optionally a new batch endpoint), not for all 1200+ students at startup.
-  - [ ] Avoid SHAP inside daemon threads; move SHAP computation to a non-daemon worker (or run synchronously only for single-student requests with tight bounds).
-  - [ ] Ensure correct feature matrix (`X`) is used when calling `generate_shap_explanation()`. 
-
-- [ ] 3) Update API endpoints to support per-student SHAP refresh:
-  - [ ] Add/adjust endpoint(s) that trigger SHAP generation for a student or filtered set.
-  - [ ] Ensure role-based filtering still hides SHAP/explanation from welfare users.
-- [ ] 4) Keep existing fast CSV/risk tier load as-is.
-- [ ] 5) Update the front-end contract only if necessary (ideally keep response shape stable).
-- [ ] 6) Run backend locally and verify:
-  - [ ] `/students` returns quickly
-  - [ ] `/students/{id}` includes SHAP/explanation for counsellor/admin after SHAP generation is triggered
-  - [ ] `/predictions-status` remains responsive
-
-## Notes / Constraints
-- SHAP can deadlock/hang in certain environments when run inside daemon threads.
-- The current server uses a global feature-importance substitute to avoid those issues; we will replace that with safe, on-demand per-student SHAP.
+- [ ] Update plan approved: implement LIME end-to-end (backend + frontend)
+- [ ] Add `lime` dependency to `backend/requirements.txt`
+- [ ] Add lazy LIME import to `backend/ml_pipeline.py`
+- [ ] Implement `MLPipeline.generate_lime_explanation()` (local, per-student)
+- [ ] Update `MLPipeline.predict_single()` to return a `lime` field
+- [ ] Frontend: add a LIME section under the SHAP area (only counsellor/admin)
+- [ ] Install/update python deps in backend venv (pip install -r requirements.txt)
+- [ ] Restart backend + frontend dev server
+- [ ] Test: `curl -X POST http://localhost:8000/students/batch`, then login as counsellor and verify LIME appears for a student
 

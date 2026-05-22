@@ -34,9 +34,9 @@ init_db()
 
 # Import ML Pipeline (optional - graceful degradation if not available)
 try:
-    from ml_pipeline import pipeline, run_full_pipeline
-    from data_service import data_service
-    from academic_results import get_academic_results
+    from .ml_pipeline import pipeline, run_full_pipeline
+    from .data_service import data_service
+    from .academic_results import get_academic_results
     ML_PIPELINE_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: ML Pipeline not available - {e}")
@@ -84,7 +84,7 @@ def _run_ml_predictions_background():
     - Updates TRAFFIC_STUDENTS atomically so the server always has valid data.
     - Catches BaseException so no crash here can kill the uvicorn process.
     """
-    global TRAFFIC_STUDENTS, PREDICTIONS_LOADING
+    global TRAFFIC_STUDENTS, PREDICTIONS_LOADING, PREDICTIONS_LOADED
     PREDICTIONS_LOADING = True
     print("[bg] Starting ML predictions for all students...")
     # Overall safety timeout: if anything in this thread hangs beyond
@@ -449,6 +449,7 @@ class StudentUpdate(BaseModel):
     explanation: Optional[str] = None
     intervention: Optional[List[str]] = None
     shap: Optional[List[Dict]] = None
+    lime: Optional[List[Dict]] = None
 
 class AuditLogCreate(BaseModel):
     action: str
@@ -495,12 +496,12 @@ def filter_student_by_role(student: dict, role: str) -> dict:
     student_copy = student.copy()
 
     if role == "welfare":
-        # Welfare sees summaries only (no full SHAP/explanation)
-        if "shap" in student_copy:
-            del student_copy["shap"]
-        if "explanation" in student_copy:
-            del student_copy["explanation"]
+        # Welfare sees summaries only (no full SHAP/LIME/explanation)
+        for k in ["shap", "lime", "explanation"]:
+            if k in student_copy:
+                del student_copy[k]
     # Counsellor and admin see all data
+
 
     return student_copy
 
@@ -640,7 +641,9 @@ async def get_student(student_id: str, current_user: dict = Depends(get_current_
                     student["shap"] = prediction.get("shap", student.get("shap", []))
                     student["explanation"] = prediction.get("explanation", student.get("explanation", ""))
                     student["intervention"] = prediction.get("intervention", student.get("intervention", []))
+                    student["lime"] = prediction.get("lime", student.get("lime", []))
                     student["lastUpdated"] = prediction.get("lastUpdated", student.get("lastUpdated", ""))
+
 
                     await manager.broadcast({
                         "type": "student_update",
