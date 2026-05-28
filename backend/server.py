@@ -565,6 +565,7 @@ async def get_students(
     page: int = 1,
     limit: int = 50,
     tier: Optional[str] = None,
+    department: Optional[str] = None,
     search: Optional[str] = None,
 ):
     """Paginated students endpoint supporting 1200+ students.
@@ -576,11 +577,25 @@ async def get_students(
     role = current_user["role"]
     limit = min(limit, 200)
     filtered = source
+
+    def department_name(programme: str) -> str:
+        if not programme:
+            return "Unknown"
+        parts = programme.split()
+        if len(parts) <= 1:
+            return programme
+        return " ".join(parts[1:]).strip()
+
     if tier:
         filtered = [s for s in filtered if s.get("tier") == tier]
+    if department:
+        dept = department.strip().lower()
+        filtered = [s for s in filtered if dept == department_name(s.get("programme", "")).lower()]
     if search:
         q = search.lower()
-        filtered = [s for s in filtered if q in s.get("name","").lower() or q in s.get("id","").lower()]
+        filtered = [s for s in filtered if q in s.get("name","").lower() or q in s.get("id","").lower() or q in s.get("programme","").lower()]
+    # Sort students by descending risk so counsellors see the highest-risk students first.
+    filtered = sorted(filtered, key=lambda s: float(s.get("risk", 0)), reverse=True)
     total = len(filtered)
     start = (page - 1) * limit
     page_data = filtered[start:start + limit]
@@ -599,6 +614,92 @@ async def predictions_status(current_user: dict = Depends(get_current_user)):
         "loading":    PREDICTIONS_LOADING,
         "total":      len(TRAFFIC_STUDENTS),
     }
+
+
+@app.get("/analytics")
+async def get_analytics(current_user: dict = Depends(get_current_user)):
+    """Get analytics summaries by faculty, department and class."""
+    source = TRAFFIC_STUDENTS if TRAFFIC_STUDENTS else STUDENTS
+
+    def faculty_name(programme: str) -> str:
+        if not programme:
+            return "Unknown"
+        programme = programme.strip()
+        if programme.startswith("BSc"):
+            return "Science"
+        if programme.startswith("BEng"):
+            return "Engineering"
+        if programme.startswith("BCom"):
+            return "Commerce"
+        if programme.startswith("BA"):
+            return "Arts"
+        return programme.split()[0]
+
+    def department_name(programme: str) -> str:
+        if not programme:
+            return "Unknown"
+        parts = programme.split()
+        if len(parts) <= 1:
+            return programme
+        return " ".join(parts[1:]).strip()
+
+    def summarize(items, total_base=None):
+        total = len(items)
+        base = total_base if total_base is not None else len(source)
+        high = len([s for s in items if s.get("tier") == "high"])
+        medium = len([s for s in items if s.get("tier") == "medium"])
+        low = len([s for s in items if s.get("tier") == "low"])
+        return {
+            "total": total,
+            "percentage": round(total / max(base, 1) * 100, 1),
+            "high": high,
+            "medium": medium,
+            "low": low,
+            "highPct": round(high / max(total, 1) * 100, 1),
+            "mediumPct": round(medium / max(total, 1) * 100, 1),
+            "lowPct": round(low / max(total, 1) * 100, 1),
+            "avgRisk": round(sum(float(s.get("risk", 0)) for s in items) / max(total, 1), 3),
+        }
+
+    faculties = {}
+    departments = {}
+    years = {}
+
+    for student in source:
+        faculty = faculty_name(student.get("programme", ""))
+        department = department_name(student.get("programme", ""))
+        year = f"Year {student.get('year', 1)}"
+
+        faculties.setdefault(faculty, []).append(student)
+        departments.setdefault(department, []).append(student)
+        years.setdefault(year, []).append(student)
+
+    return {
+        "totalStudents": len(source),
+        "counts": summarize(source),
+        "faculties": [
+            {"faculty": k, **summarize(v)} for k, v in sorted(faculties.items(), key=lambda kv: kv[0])
+        ],
+        "departments": [
+            {"department": k, **summarize(v)} for k, v in sorted(departments.items(), key=lambda kv: kv[0])
+        ],
+        "classes": [
+            {"class": k, **summarize(v)} for k, v in sorted(years.items(), key=lambda kv: kv[0])
+        ],
+        "topStudents": [
+            {"id": s.get("id"), "name": s.get("name"), "programme": s.get("programme"), "year": s.get("year"),
+             "risk": round(float(s.get("risk", 0)) * 100), "tier": s.get("tier"),
+             "attendance": s.get("attendance"), "lmsLogins": s.get("lmsLogins"), "facilityAccess": s.get("facilityAccess")}
+            for s in sorted(source, key=lambda s: float(s.get("risk", 0)), reverse=True)[:12]
+        ],
+    }
+
+
+@app.post("/students/assess")
+async def assess_student(assessment: dict, current_user: dict = Depends(get_current_user)):
+    """Run a live prediction from manual feature contributions."""
+    result = data_service.manual_assessment(assessment)
+    return result
 
 
 @app.post("/students/batch")
@@ -754,14 +855,11 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
     Get system statistics from trained ML model data
     """
 
-
-    # Use whichever student list is available (fast CSV or ML-enriched)
-    # Never call the blocking load_students_with_predictions() here
-
+    source = TRAFFIC_STUDENTS if TRAFFIC_STUDENTS else STUDENTS
     counts = {
-        "high": len([s for s in STUDENTS if s.get("tier") == "high"]),
-        "medium": len([s for s in STUDENTS if s.get("tier") == "medium"]),
-        "low": len([s for s in STUDENTS if s.get("tier") == "low"]),
+        "high": len([s for s in source if s.get("tier") == "high"]),
+        "medium": len([s for s in source if s.get("tier") == "medium"]),
+        "low": len([s for s in source if s.get("tier") == "low"]),
     }
 
     # Get model info from pipeline if available

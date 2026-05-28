@@ -149,6 +149,189 @@ function StudentCard({ student, selected, onClick }) {
   );
 }
 
+function AnalyticsPanel({ analytics, onDepartmentClick }) {
+  if (!analytics) {
+    return (
+      <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+        <div style={{color:"rgba(255,255,255,0.5)",fontSize:14}}>Loading analytics...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{flex:1,overflowY:"auto",padding:"24px 28px",minHeight:"calc(100vh - 108px)"}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:22}}>
+        {[
+          {label:"Total Students", value:analytics.totalStudents, color:"#fff"},
+          {label:"High Risk", value:analytics.counts.high, color:"#FF3B30"},
+          {label:"Avg Risk", value:`${Math.round((analytics.counts.avgRisk||0)*100)}%`, color:"#FF9F0A"},
+          {label:"Top Class", value:analytics.classes?.[0]?.class || "Year 1", color:"#30D158"},
+        ].map(card => (
+          <div key={card.label} style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:16,padding:18}}>
+            <div style={{fontSize:10,color:"rgba(255,255,255,0.4)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:8}}>{card.label}</div>
+            <div style={{fontSize:28,fontWeight:800,color:card.color,fontFamily:"'Barlow Condensed',sans-serif"}}>{card.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr",gap:16,marginBottom:22}}>
+        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:22}}>
+          <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:14}}>Faculty Analytics</div>
+          <div style={{display:"grid",gap:10}}>
+            {analytics.faculties.map((row,i) => (
+              <div key={i} style={{display:"grid",gap:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",padding:"10px 0",borderBottom:i < analytics.faculties.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none"}}>
+                  <div>
+                    <div style={{fontSize:12,color:"rgba(255,255,255,0.7)",fontWeight:600}}>{row.faculty}</div>
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:4}}>
+                      <div style={{fontSize:11,color:"rgba(255,255,255,0.35)"}}>{row.total} students</div>
+                      <div style={{fontSize:11,color:"rgba(255,255,255,0.35)"}}>{row.percentage}% of students</div>
+                    </div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:12,color:"#fff"}}>{Math.round((row.avgRisk||0)*100)}%</div>
+                    <div style={{fontSize:10,color:"rgba(255,255,255,0.4)"}}>{row.high} high</div>
+                  </div>
+                </div>
+                <div style={{height:6,background:"rgba(255,255,255,0.06)",borderRadius:999,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${row.percentage}%`,background:"#30D158",borderRadius:999,transition:"width 0.5s"}} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:22}}>
+          <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:14}}>Class Analytics</div>
+          <div style={{display:"grid",gap:10}}>
+            {analytics.classes.map((row,i)=>(
+              <div key={i}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",padding:"10px 0",borderBottom:i < analytics.classes.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none"}}>
+                  <div style={{minWidth:0,flex:1}}>
+                    <div style={{fontSize:12,color:"rgba(255,255,255,0.7)"}}>{row.class}</div>
+                    <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",marginTop:4}}>{row.total} students · {row.percentage}% of cohort</div>
+                  </div>
+                  <div style={{fontSize:12,color:"#fff"}}>{row.total}</div>
+                </div>
+                <div style={{height:6,background:"rgba(255,255,255,0.06)",borderRadius:999,overflow:"hidden",marginTop:8,marginBottom:6}}>
+                  <div style={{height:"100%",width:`${row.percentage}%`,background:"#30D158",borderRadius:999,transition:"width 0.5s"}} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:22}}>
+          <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:14}}>Department Analytics</div>
+          <div style={{display:"grid",gap:10}}>
+            {analytics.departments.slice(0,8).map((row,i)=>(
+              <button key={i} onClick={() => onDepartmentClick?.(row.department)}
+                style={{width:"100%",display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",padding:"12px 14px",borderRadius:14,
+                  background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",color:"inherit",cursor:"pointer",
+                  textAlign:"left"}}>
+                <div style={{minWidth:0,flex:1}}>
+                  <div style={{fontSize:12,color:"rgba(255,255,255,0.8)",fontWeight:600}}>{row.department}</div>
+                  <div style={{fontSize:10,color:"rgba(255,255,255,0.35)",marginTop:4}}>{row.total} students · {row.high} high risk</div>
+                </div>
+                <div style={{fontSize:12,fontWeight:700,color:"#FF3B30"}}>{row.high}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:22}}>
+          <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:14}}>Top High Risk Students</div>
+          <div style={{display:"grid",gap:10}}>
+            {analytics.topStudents.map((s,i)=>(
+              <div key={s.id || i} style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",padding:"10px 0",borderBottom:i < analytics.topStudents.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none"}}>
+                <div>
+                  <div style={{fontSize:12,color:"#fff",fontWeight:700}}>{s.name}</div>
+                  <div style={{fontSize:10,color:"rgba(255,255,255,0.35)"}}>{s.programme} · Yr {s.year}</div>
+                </div>
+                <div style={{fontSize:12,fontWeight:700,color:s.tier === 'high' ? '#FF3B30' : s.tier === 'medium' ? '#FF9F0A' : '#30D158'}}>
+                  {s.risk}%
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AssessmentForm({ form, onChange, onSubmit, result, loading, error }) {
+  const fieldStyles = {width:"100%",padding:"11px 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.12)",background:"rgba(255,255,255,0.04)",color:"#fff",fontSize:13,outline:"none"};
+  return (
+    <div style={{flex:1,overflowY:"auto",padding:"24px 28px",minHeight:"calc(100vh - 108px)"}}>
+      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:18,padding:24}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+          <div>
+            <div style={{fontSize:18,fontWeight:700,color:"#fff",marginBottom:4}}>Manual Student Risk Assessment</div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,0.45)"}}>Enter at least five feature values to get a live risk estimate.</div>
+          </div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.4)",textTransform:"uppercase",letterSpacing:1.5}}>{loading ? "Calculating…" : "Live preview"}</div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:14,marginBottom:16}}>
+          {[
+            {label:"Student Name", key:"name", type:"text", placeholder:"Full name"},
+            {label:"Programme", key:"programme", type:"text", placeholder:"e.g. BSc Computer Science"},
+            {label:"Year", key:"year", type:"number", placeholder:"3"},
+            {label:"GPA Sem 3", key:"gpa_sem3", type:"number", placeholder:"2.8"},
+            {label:"Attendance %", key:"attendance", type:"number", placeholder:"68"},
+            {label:"LMS logins/week", key:"lms_logins", type:"number", placeholder:"7"},
+            {label:"Facility access/week", key:"facility_access", type:"number", placeholder:"3"},
+            {label:"Library visits/week", key:"library_visits", type:"number", placeholder:"1"},
+            {label:"Assignments/month", key:"assignment_submissions", type:"number", placeholder:"5"},
+            {label:"After-hours WiFi", key:"after_hours_wifi", type:"number", placeholder:"2"},
+          ].map(field => (
+            <div key={field.key}>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.45)",marginBottom:6}}>{field.label}</div>
+              <input
+                type={field.type}
+                value={form[field.key] ?? ""}
+                placeholder={field.placeholder}
+                onChange={e => onChange(field.key, field.type === 'number' ? e.target.value : e.target.value)}
+                style={fieldStyles}
+              />
+            </div>
+          ))}
+        </div>
+        <button onClick={onSubmit} disabled={loading}
+          style={{padding:"14px 18px",borderRadius:12,border:"none",
+            background:loading ? "rgba(99,106,255,0.35)" : "#636AFF",
+            color:"#fff",fontSize:13,fontWeight:700,cursor:loading ? "not-allowed" : "pointer"}}>
+          {loading ? "Calculating risk…" : "Calculate Live Risk"}
+        </button>
+        {error && <div style={{marginTop:14,color:"#FF3B30",fontSize:12}}>{error}</div>}
+        {result && (
+          <div style={{marginTop:20,background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:20}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:18,flexWrap:"wrap"}}>
+              <div>
+                <div style={{fontSize:12,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:6}}>Risk Estimate</div>
+                <div style={{fontSize:24,fontWeight:800,color:"#fff"}}>{result.name}</div>
+                <div style={{fontSize:12,color:"rgba(255,255,255,0.45)",marginTop:4}}>{result.programme} · Year {result.year}</div>
+              </div>
+              <div style={{width:120,height:120}}><RiskGauge value={result.risk || 0}/></div>
+            </div>
+            <div style={{marginTop:18,fontSize:13,color:"rgba(255,255,255,0.75)",lineHeight:1.7}}>{result.explanation}</div>
+            <div style={{marginTop:16,display:"grid",gap:10}}>
+              {result.feature_contributions.slice(0,5).map((c,i)=>(
+                <div key={i} style={{display:"flex",justifyContent:"space-between",gap:10}}>
+                  <div style={{fontSize:12,color:"rgba(255,255,255,0.7)"}}>{c.feature}</div>
+                  <div style={{fontSize:12,fontWeight:700,color:c.dir > 0 ? "#FF3B30" : "#30D158"}}>
+                    {c.dir > 0 ? "+" : ""}{Math.round(c.weight * 100)}%
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AppHeader({ user, onLogout, alertCount }) {
   const roleColour = user.role==="counsellor"?"#636AFF":user.role==="welfare"?"#30D158":"#FF9F0A";
   return (
@@ -599,6 +782,7 @@ function ClinicalDashboard({ user, onLogout }) {
   const [students,    setStudents]    = useState([]);
   const [selected,    setSelected]    = useState(null);
   const [filter,      setFilter]      = useState("all");
+  const [departmentFilter, setDepartmentFilter] = useState("");
   const [search,      setSearch]      = useState("");
   const [loading,     setLoading]     = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -610,6 +794,23 @@ function ClinicalDashboard({ user, onLogout }) {
   const [pipelineMsg, setPipelineMsg] = useState("");
   const [pipelineStatus,setPipelineStatus]=useState(null);
   const [xaiView, setXaiView] = useState("shap");
+  const [pageMode,    setPageMode]    = useState("students");
+  const [analytics,   setAnalytics]   = useState(null);
+  const [assessmentForm, setAssessmentForm] = useState({
+    name: "",
+    programme: "",
+    year: 1,
+    gpa_sem3: "",
+    attendance: "",
+    lms_logins: "",
+    facility_access: "",
+    library_visits: "",
+    assignment_submissions: "",
+    after_hours_wifi: "",
+  });
+  const [assessmentResult, setAssessmentResult] = useState(null);
+  const [assessmentLoading, setAssessmentLoading] = useState(false);
+  const [assessmentError, setAssessmentError] = useState("");
   const searchTimer = useRef(null);
   const listRef     = useRef(null);
 
@@ -618,6 +819,7 @@ function ClinicalDashboard({ user, onLogout }) {
     try {
       const params = { page: pg, limit: 50 };
       if (filt && filt !== "all") params.tier = filt;
+      if (departmentFilter) params.department = departmentFilter;
       if (srch) params.search = srch;
       const r = await api.fetchStudents(params);
       if (r.success) {
@@ -637,6 +839,11 @@ function ClinicalDashboard({ user, onLogout }) {
       setLoading(false);
       setLoadingMore(false);
     }
+  }, []);
+
+  const loadAnalytics = useCallback(async () => {
+    const r = await api.fetchAnalytics();
+    if (r.success) setAnalytics(r.analytics);
   }, []);
 
   // Initial load + counts + poll for ML readiness
@@ -718,7 +925,30 @@ function ClinicalDashboard({ user, onLogout }) {
   useEffect(() => {
     setPage(1);
     fetchPage(1, filter, search, true);
-  }, [filter, search]);
+  }, [filter, search, departmentFilter]);
+
+  useEffect(() => {
+    if (pageMode === "analytics") {
+      loadAnalytics();
+    }
+  }, [pageMode, loadAnalytics]);
+
+  const handleAssessmentSubmit = useCallback(async () => {
+    setAssessmentError("");
+    setAssessmentLoading(true);
+    try {
+      const r = await api.assessStudent(assessmentForm);
+      if (r.success) {
+        setAssessmentResult(r.result);
+      } else {
+        setAssessmentError(r.error || "Unable to calculate risk.");
+      }
+    } catch (e) {
+      setAssessmentError("Unable to calculate risk.");
+    } finally {
+      setAssessmentLoading(false);
+    }
+  }, [assessmentForm]);
 
   function handleSearch(val) {
     clearTimeout(searchTimer.current);
@@ -788,12 +1018,41 @@ function ClinicalDashboard({ user, onLogout }) {
             {f.label} <span style={{opacity:0.7}}>({f.count})</span>
           </button>
         ))}
+        <div style={{display:"flex",gap:8}}>
+          {[
+            {key:"students", label:"Students"},
+            {key:"analytics", label:"Analytics"},
+            {key:"assessment", label:"Assessment"},
+          ].map(item => (
+            <button key={item.key} onClick={()=>setPageMode(item.key)}
+              style={{padding:"6px 14px",borderRadius:20,border:"1px solid",cursor:"pointer",
+                borderColor:pageMode===item.key?"rgba(255,255,255,0.3)":"rgba(255,255,255,0.1)",
+                background:pageMode===item.key?"rgba(255,255,255,0.06)":"transparent",
+                color:pageMode===item.key?"#fff":"rgba(255,255,255,0.4)",fontSize:12,fontWeight:600,
+                transition:"all 0.2s"}}>
+              {item.label}
+            </button>
+          ))}
+        </div>
         <input
-          placeholder="Search name or ID…"
+          placeholder="Search name, ID, or programme…"
           onChange={e=>handleSearch(e.target.value)}
           style={{marginLeft:"auto",padding:"6px 14px",background:"rgba(255,255,255,0.05)",
             border:"1px solid rgba(255,255,255,0.1)",borderRadius:20,color:"#fff",
             fontSize:12,outline:"none",width:200}}/>
+        {departmentFilter && (
+          <div style={{display:"flex",alignItems:"center",gap:10,padding:"6px 14px",borderRadius:20,
+            border:"1px solid rgba(99,106,255,0.22)",background:"rgba(99,106,255,0.12)",color:"#F7FBFF",
+            fontSize:12,fontWeight:600}}>
+            <span style={{opacity:0.85}}>Dept:</span>
+            <span style={{color:"#fff"}}>{departmentFilter}</span>
+            <button onClick={() => setDepartmentFilter("")}
+              style={{border:"none",background:"transparent",color:"#fff",cursor:"pointer",fontSize:11,
+                textDecoration:"underline",opacity:0.9}}>
+              Clear
+            </button>
+          </div>
+        )}
         {user.role==="welfare"&&(
           <div style={{padding:"5px 14px",borderRadius:20,background:"rgba(48,209,88,0.08)",
             border:"1px solid rgba(48,209,88,0.2)",fontSize:11,color:"rgba(48,209,88,0.8)"}}>
@@ -804,34 +1063,35 @@ function ClinicalDashboard({ user, onLogout }) {
 
       {/* Main layout */}
       <div style={{display:"flex",flex:1,overflow:"hidden",height:"calc(100vh - 108px)"}}>
-
-        {/* Student list sidebar */}
-        <div ref={listRef} onScroll={handleScroll}
-          style={{width:290,flexShrink:0,borderRight:"1px solid rgba(255,255,255,0.06)",
-            overflowY:"auto",padding:"14px 12px"}}>
-          {students.map(s=>(
-            <StudentCard key={s.id} student={s} selected={selected?.id===s.id}
-              onClick={()=>setSelected(s)}/>
-          ))}
-          {loadingMore&&(
-            <div style={{textAlign:"center",padding:16,color:"rgba(255,255,255,0.3)",fontSize:12}}>
-              <div style={{width:20,height:20,border:"2px solid rgba(255,255,255,0.1)",
-                borderTopColor:"#FF9F0A",borderRadius:"50%",animation:"spin 0.8s linear infinite",
-                margin:"0 auto 6px"}}/>
-              Loading more…
+        {pageMode === "students" ? (
+          <>
+            {/* Student list sidebar */}
+            <div ref={listRef} onScroll={handleScroll}
+              style={{width:290,flexShrink:0,borderRight:"1px solid rgba(255,255,255,0.06)",
+                overflowY:"auto",padding:"14px 12px"}}>
+              {students.map(s=>(
+                <StudentCard key={s.id} student={s} selected={selected?.id===s.id}
+                  onClick={()=>setSelected(s)}/>
+              ))}
+              {loadingMore&&(
+                <div style={{textAlign:"center",padding:16,color:"rgba(255,255,255,0.3)",fontSize:12}}>
+                  <div style={{width:20,height:20,border:"2px solid rgba(255,255,255,0.1)",
+                    borderTopColor:"#FF9F0A",borderRadius:"50%",animation:"spin 0.8s linear infinite",
+                    margin:"0 auto 6px"}}/>
+                  Loading more…
+                </div>
+              )}
+              {!loadingMore && page >= totalPages && students.length > 0 && (
+                <div style={{textAlign:"center",padding:"12px 0",fontSize:11,color:"rgba(255,255,255,0.2)"}}>
+                  All {total} students loaded
+                </div>
+              )}
             </div>
-          )}
-          {!loadingMore && page >= totalPages && students.length > 0 && (
-            <div style={{textAlign:"center",padding:"12px 0",fontSize:11,color:"rgba(255,255,255,0.2)"}}>
-              All {total} students loaded
-            </div>
-          )}
-        </div>
 
-        {/* Detail panel */}
-        {selected ? (
-          <div style={{flex:1,overflowY:"auto",padding:"24px 28px"}} key={selected.id}>
-            <div style={{animation:"slideIn 0.3s ease"}}>
+            {/* Detail panel */}
+            {selected ? (
+              <div style={{flex:1,overflowY:"auto",padding:"24px 28px"}} key={selected.id}>
+                <div style={{animation:"slideIn 0.3s ease"}}>
 
               {/* Student header */}
               <div style={{display:"flex",alignItems:"flex-start",gap:24,marginBottom:24}}>
@@ -1068,6 +1328,25 @@ function ClinicalDashboard({ user, onLogout }) {
           <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center"}}>
             <p style={{color:"rgba(255,255,255,0.2)",fontSize:14}}>Select a student to view their profile.</p>
           </div>
+        )}
+        </>
+        ) : pageMode === "analytics" ? (
+          <AnalyticsPanel analytics={analytics} onDepartmentClick={(department) => {
+            setPageMode("students");
+            setFilter("high");
+            setDepartmentFilter(department);
+            setSearch("");
+            setPage(1);
+          }} />
+        ) : (
+          <AssessmentForm
+            form={assessmentForm}
+            onChange={(key, value) => setAssessmentForm(prev => ({ ...prev, [key]: value }))}
+            onSubmit={handleAssessmentSubmit}
+            result={assessmentResult}
+            loading={assessmentLoading}
+            error={assessmentError}
+          />
         )}
       </div>
     </div>

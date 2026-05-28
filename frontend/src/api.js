@@ -94,10 +94,11 @@ export async function login(username, password, role) {
 export async function fetchStudents(params = {}) {
   try {
     const qs = new URLSearchParams();
-    if (params.page)   qs.set('page',   params.page);
-    if (params.limit)  qs.set('limit',  params.limit);
-    if (params.tier)   qs.set('tier',   params.tier);
-    if (params.search) qs.set('search', params.search);
+    if (params.page)       qs.set('page',   params.page);
+    if (params.limit)      qs.set('limit',  params.limit);
+    if (params.tier)       qs.set('tier',   params.tier);
+    if (params.department) qs.set('department', params.department);
+    if (params.search)     qs.set('search', params.search);
     const url = `${API_PREFIX}/students${qs.toString() ? '?' + qs.toString() : ''}`;
     const response = await authenticatedFetch(url);
     if (!response.ok) throw new Error('Failed to fetch students');
@@ -148,6 +149,34 @@ export async function fetchStats() {
     return { success: true, ...data };
   } catch (error) {
     return { success: false, error: error.message };
+  }
+}
+
+export async function fetchAnalytics() {
+  try {
+    const response = await authenticatedFetch(`${API_PREFIX}/analytics`);
+    if (!response.ok) throw new Error('Failed to fetch analytics');
+    const data = await response.json();
+    return { success: true, analytics: data };
+  } catch (error) {
+    return { success: false, error: error.message, analytics: null };
+  }
+}
+
+export async function assessStudent(assessmentData) {
+  try {
+    const response = await authenticatedFetch(`${API_PREFIX}/students/assess`, {
+      method: 'POST',
+      body: JSON.stringify(assessmentData),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Failed to assess student');
+    }
+    const data = await response.json();
+    return { success: true, result: data };
+  } catch (error) {
+    return { success: false, error: error.message, result: null };
   }
 }
 
@@ -440,6 +469,8 @@ export default {
   getPreprocessingStatus,
   getPreprocessingResults,
   healthCheck,
+  fetchAnalytics,
+  assessStudent,
   wsManager,
   API_PREFIX,
 };
