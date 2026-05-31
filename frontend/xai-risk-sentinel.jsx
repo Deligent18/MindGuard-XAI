@@ -149,17 +149,47 @@ function StudentCard({ student, selected, onClick }) {
   );
 }
 
-function AnalyticsPanel({ analytics, onDepartmentClick }) {
-  if (!analytics) {
+function AnalyticsPanel({ analytics, loading, error, onDepartmentClick }) {
+  if (loading) {
     return (
-      <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
-        <div style={{color:"rgba(255,255,255,0.5)",fontSize:14}}>Loading analytics...</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "60px 20px" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{
+            width: 36, height: 36, border: "3px solid rgba(255,255,255,0.15)",
+            borderTop: "3px solid #0A84FF", borderRadius: "50%",
+            animation: "spin 0.8s linear infinite", margin: "0 auto 12px"
+          }}></div>
+          <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 14 }}>Loading analytics...</div>
+        </div>
       </div>
     );
   }
 
+  if (error) {
+    return (
+      <div style={{
+        margin: 20, padding: "20px 24px",
+        background: "rgba(255,59,48,0.12)", border: "1px solid rgba(255,59,48,0.3)",
+        borderRadius: 12
+      }}>
+        <div style={{ color: "#FF3B30", fontWeight: 600, marginBottom: 6 }}>Unable to load analytics</div>
+        <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 14 }}>{error}</div>
+      </div>
+    );
+  }
+
+  if (!analytics) {
+    return (
+      <div style={{ padding: 40, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
+        No analytics data available
+      </div>
+    );
+  }
+  // ... rest of the component continues unchanged
+
   return (
     <div style={{flex:1,overflowY:"auto",padding:"24px 28px",minHeight:"calc(100vh - 108px)"}}>
+
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:22}}>
         {[
           {label:"Total Students", value:analytics.totalStudents, color:"#fff"},
@@ -796,6 +826,10 @@ function ClinicalDashboard({ user, onLogout }) {
   const [xaiView, setXaiView] = useState("shap");
   const [pageMode,    setPageMode]    = useState("students");
   const [analytics,   setAnalytics]   = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState("");
+  const analyticsCache = useRef(null);
+
   const [assessmentForm, setAssessmentForm] = useState({
     name: "",
     programme: "",
@@ -842,9 +876,29 @@ function ClinicalDashboard({ user, onLogout }) {
   }, []);
 
   const loadAnalytics = useCallback(async () => {
-    const r = await api.fetchAnalytics();
-    if (r.success) setAnalytics(r.analytics);
+    // Return cached data immediately on subsequent tab visits
+    if (analyticsCache.current) {
+      setAnalytics(analyticsCache.current);
+      return;
+    }
+
+    setAnalyticsLoading(true);
+    setAnalyticsError("");
+    try {
+      const r = await api.fetchAnalytics();
+      if (r.success && r.analytics) {
+        analyticsCache.current = r.analytics;
+        setAnalytics(r.analytics);
+      } else {
+        setAnalyticsError(r.error || "Failed to load analytics data");
+      }
+    } catch (e) {
+      setAnalyticsError("Error connecting to server: " + (e.message || "Unknown error"));
+    } finally {
+      setAnalyticsLoading(false);
+    }
   }, []);
+
 
   // Initial load + counts + poll for ML readiness
   useEffect(() => {
@@ -1219,9 +1273,19 @@ function ClinicalDashboard({ user, onLogout }) {
                   )}
 
                   {((xaiView === "shap" && (!selected.shap||selected.shap.length===0)) || (xaiView === "lime" && (!selected.lime||selected.lime.length===0))) && (
-                    <p style={{fontSize:12,color:"rgba(255,255,255,0.3)",fontStyle:"italic"}}>
-                      No XAI data available for this student.
-                    </p>
+                    detailLoading ? (
+                      <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0"}}>
+                        <div style={{width:13,height:13,border:"2px solid rgba(255,255,255,0.15)",
+                          borderTopColor:"#636AFF",borderRadius:"50%",animation:"spin 0.9s linear infinite",flexShrink:0}}/>
+                        <p style={{fontSize:12,color:"rgba(255,255,255,0.4)",fontStyle:"italic"}}>
+                          Computing SHAP explanation…
+                        </p>
+                      </div>
+                    ) : (
+                      <p style={{fontSize:12,color:"rgba(255,255,255,0.3)",fontStyle:"italic"}}>
+                        No XAI data available for this student.
+                      </p>
+                    )
                   )}
                   {user.role==="welfare"&& xaiView!=='lime' && (
                     <div style={{fontSize:11,color:"rgba(255,255,255,0.25)",marginTop:10,fontStyle:"italic"}}>
@@ -1331,14 +1395,20 @@ function ClinicalDashboard({ user, onLogout }) {
         )}
         </>
         ) : pageMode === "analytics" ? (
-          <AnalyticsPanel analytics={analytics} onDepartmentClick={(department) => {
-            setPageMode("students");
-            setFilter("high");
-            setDepartmentFilter(department);
-            setSearch("");
-            setPage(1);
-          }} />
+          <AnalyticsPanel
+            analytics={analytics}
+            loading={analyticsLoading}
+            error={analyticsError}
+            onDepartmentClick={(department) => {
+              setPageMode("students");
+              setFilter("high");
+              setDepartmentFilter(department);
+              setSearch("");
+              setPage(1);
+            }}
+          />
         ) : (
+
           <AssessmentForm
             form={assessmentForm}
             onChange={(key, value) => setAssessmentForm(prev => ({ ...prev, [key]: value }))}

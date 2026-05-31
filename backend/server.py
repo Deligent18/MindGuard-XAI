@@ -156,8 +156,31 @@ def _run_ml_predictions_background():
         probs  = pipeline.model.predict_proba(X)
 
         risk_map = {0: 'low', 1: 'medium', 2: 'high'}
-        risk_scores = probs[:, 2] + 0.5 * probs[:, 1]
+
+        # Probability smoothing to prevent risk collapsing to only 0/50/100
+        # (when predict_proba outputs are near one-hot).
+        # We apply epsilon smoothing then renormalize.
+        eps = 0.05
+        probs = probs * (1 - 2 * eps) + eps
+        probs = probs / probs.sum(axis=1, keepdims=True)
+
+        # Probability smoothing — prevents discrete 0%/50%/100% scores
+        # when XGBoost returns near-one-hot probability vectors.
+        smoothed_proba = np.array(probs, dtype=float)
+        for i in range(len(smoothed_proba)):
+            max_val = np.max(smoothed_proba[i])
+            if max_val > 0.95:
+                max_idx = np.argmax(smoothed_proba[i])
+                smoothed_proba[i][max_idx] = max_val * 0.95
+                other_sum = 1.0 - smoothed_proba[i][max_idx]
+                for j in range(len(smoothed_proba[i])):
+                    if j != max_idx:
+                        smoothed_proba[i][j] = other_sum / (len(smoothed_proba[i]) - 1)
+
+        risk_scores = smoothed_proba[:, 2] + 0.5 * smoothed_proba[:, 1]
         risk_scores = np.clip(risk_scores, 0, 1)
+
+
 
         # ── Step 4: per-student SHAP is deferred ─────────────────────────────
         # The earlier implementation computed only a global feature-importance
@@ -179,12 +202,8 @@ def _run_ml_predictions_background():
             s = dict(student)
             s['risk']        = risk
             s['tier']        = tier
-            s['shap']        = global_shap   # same global shap for all (fast path)
-            s['explanation'] = (
-                f"{s.get('name','Student')} has a {tier} risk score of "
-                f"{round(risk*100)}%. Key factors: "
-                + ", ".join(g['feature'] for g in global_shap[:3]) + "."
-            )
+            s['shap']        = []
+            s['explanation'] = "ML predictions are being computed in the background."
             s['intervention'] = (
                 ["Immediate counsellor contact within 24 hours",
                  "Safety planning assessment", "Academic load review"]
@@ -618,81 +637,116 @@ async def predictions_status(current_user: dict = Depends(get_current_user)):
 
 @app.get("/analytics")
 async def get_analytics(current_user: dict = Depends(get_current_user)):
-    """Get analytics summaries by faculty, department and class."""
-    source = TRAFFIC_STUDENTS if TRAFFIC_STUDENTS else STUDENTS
+    """
+    Get analytics summaries by faculty, department and class.
+    Includes: total students, risk distribution, faculty/department/class breakdowns,
+    and top 12 high-risk students for immediate action.
+    """
+    try:
+        source = TRAFFIC_STUDENTS if TRAFFIC_STUDENTS else STUDENTS
 
-    def faculty_name(programme: str) -> str:
-        if not programme:
-            return "Unknown"
-        programme = programme.strip()
-        if programme.startswith("BSc"):
-            return "Science"
-        if programme.startswith("BEng"):
-            return "Engineering"
-        if programme.startswith("BCom"):
-            return "Commerce"
-        if programme.startswith("BA"):
-            return "Arts"
-        return programme.split()[0]
+        if not source:
+            return {
+                "totalStudents": 0,
+                "counts": {"total": 0, "percentage": 0, "high": 0, "medium": 0, "low": 0,
+                          "highPct": 0, "mediumPct": 0, "lowPct": 0, "avgRisk": 0},
+                "faculties": [],
+                "departments": [],
+                "classes": [],
+                "topStudents": [],
+            }
 
-    def department_name(programme: str) -> str:
-        if not programme:
-            return "Unknown"
-        parts = programme.split()
-        if len(parts) <= 1:
-            return programme
-        return " ".join(parts[1:]).strip()
-
-    def summarize(items, total_base=None):
-        total = len(items)
-        base = total_base if total_base is not None else len(source)
-        high = len([s for s in items if s.get("tier") == "high"])
-        medium = len([s for s in items if s.get("tier") == "medium"])
-        low = len([s for s in items if s.get("tier") == "low"])
-        return {
-            "total": total,
-            "percentage": round(total / max(base, 1) * 100, 1),
-            "high": high,
-            "medium": medium,
-            "low": low,
-            "highPct": round(high / max(total, 1) * 100, 1),
-            "mediumPct": round(medium / max(total, 1) * 100, 1),
-            "lowPct": round(low / max(total, 1) * 100, 1),
-            "avgRisk": round(sum(float(s.get("risk", 0)) for s in items) / max(total, 1), 3),
+        FACULTY_MAP = {
+            "BSc": "Science",
+            "BEng": "Engineering",
+            "BCom": "Commerce",
+            "BA": "Arts",
         }
 
-    faculties = {}
-    departments = {}
-    years = {}
+        def faculty_name(programme: str) -> str:
+            if not programme:
+                return "Unknown"
+            programme = programme.strip()
+            for prefix, faculty in FACULTY_MAP.items():
+                if programme.startswith(prefix):
+                    return faculty
+            return programme.split()[0] if programme else "Unknown"
 
-    for student in source:
-        faculty = faculty_name(student.get("programme", ""))
-        department = department_name(student.get("programme", ""))
-        year = f"Year {student.get('year', 1)}"
+        def department_name(programme: str) -> str:
+            if not programme:
+                return "Unknown"
+            parts = programme.split()
+            if len(parts) <= 1:
+                return programme
+            return " ".join(parts[1:]).strip()
 
-        faculties.setdefault(faculty, []).append(student)
-        departments.setdefault(department, []).append(student)
-        years.setdefault(year, []).append(student)
+        def summarize(items, total_base=None):
+            total = len(items)
+            base = total_base if total_base is not None else len(source)
+            high = len([s for s in items if s.get("tier") == "high"])
+            medium = len([s for s in items if s.get("tier") == "medium"])
+            low = len([s for s in items if s.get("tier") == "low"])
+            avg_risk = sum(float(s.get("risk", 0)) for s in items) / max(total, 1)
+            return {
+                "total": total,
+                "percentage": round(total / max(base, 1) * 100, 1),
+                "high": high,
+                "medium": medium,
+                "low": low,
+                "highPct": round(high / max(total, 1) * 100, 1),
+                "mediumPct": round(medium / max(total, 1) * 100, 1),
+                "lowPct": round(low / max(total, 1) * 100, 1),
+                "avgRisk": round(avg_risk, 3),
+            }
 
-    return {
-        "totalStudents": len(source),
-        "counts": summarize(source),
-        "faculties": [
-            {"faculty": k, **summarize(v)} for k, v in sorted(faculties.items(), key=lambda kv: kv[0])
-        ],
-        "departments": [
-            {"department": k, **summarize(v)} for k, v in sorted(departments.items(), key=lambda kv: kv[0])
-        ],
-        "classes": [
-            {"class": k, **summarize(v)} for k, v in sorted(years.items(), key=lambda kv: kv[0])
-        ],
-        "topStudents": [
-            {"id": s.get("id"), "name": s.get("name"), "programme": s.get("programme"), "year": s.get("year"),
-             "risk": round(float(s.get("risk", 0)) * 100), "tier": s.get("tier"),
-             "attendance": s.get("attendance"), "lmsLogins": s.get("lmsLogins"), "facilityAccess": s.get("facilityAccess")}
-            for s in sorted(source, key=lambda s: float(s.get("risk", 0)), reverse=True)[:12]
-        ],
-    }
+        faculties = {}
+        departments = {}
+        years = {}
+
+        for student in source:
+            faculty = faculty_name(student.get("programme", ""))
+            department = department_name(student.get("programme", ""))
+            year = f"Year {student.get('year', 1)}"
+            faculties.setdefault(faculty, []).append(student)
+            departments.setdefault(department, []).append(student)
+            years.setdefault(year, []).append(student)
+
+        top_students = sorted(source, key=lambda s: float(s.get("risk", 0)), reverse=True)[:12]
+
+        return {
+            "totalStudents": len(source),
+            "counts": summarize(source),
+            "faculties": [
+                {"faculty": k, **summarize(v)}
+                for k, v in sorted(faculties.items(), key=lambda kv: kv[0])
+            ],
+            "departments": [
+                {"department": k, **summarize(v)}
+                for k, v in sorted(departments.items(), key=lambda kv: kv[0])
+            ],
+            "classes": [
+                {"class": k, **summarize(v)}
+                for k, v in sorted(years.items(), key=lambda kv: kv[0])
+            ],
+            "topStudents": [
+                {
+                    "id": s.get("id"),
+                    "name": s.get("name"),
+                    "programme": s.get("programme"),
+                    "year": s.get("year"),
+                    "risk": round(float(s.get("risk", 0)) * 100),
+                    "tier": s.get("tier"),
+                    "attendance": s.get("attendance"),
+                    "lmsLogins": s.get("lmsLogins"),
+                    "facilityAccess": s.get("facilityAccess"),
+                }
+                for s in top_students
+            ],
+        }
+    except Exception as e:
+        print(f"[analytics] Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Analytics error: {str(e)}")
+
 
 
 @app.post("/students/assess")
@@ -741,8 +795,14 @@ async def get_student(student_id: str, current_user: dict = Depends(get_current_
 
     # Only counsellor/admin should receive SHAP/explanation.
     if role in ["counsellor", "admin"]:
-        shap_missing = (not student.get("shap")) or (len(student.get("shap")) == 0)
-        explanation_missing = not student.get("explanation")
+        shap_missing = (not student.get("shap")) or (len(student.get("shap", [])) == 0)
+        _expl = student.get("explanation") or ""
+        _PLACEHOLDER_PHRASES = (
+            "ml predictions are being computed",
+            "being computed in the background",
+            "shap explanation pending",
+        )
+        explanation_missing = not _expl or any(p in _expl.lower() for p in _PLACEHOLDER_PHRASES)
         if shap_missing or explanation_missing:
             if ML_PIPELINE_AVAILABLE:
                 try:
