@@ -180,6 +180,15 @@ export async function assessStudent(assessmentData) {
   }
 }
 
+export const getRiskLevel = (riskPercent) => {
+  const percent = parseFloat(riskPercent) || 0;
+  if (percent >= 75) return { level: 'high', color: '#ef4444', bgColor: 'bg-red-500/10', label: 'HIGH RISK' };
+  if (percent >= 50) return { level: 'medium', color: '#eab308', bgColor: 'bg-yellow-500/10', label: 'MEDIUM RISK' };
+  return { level: 'low', color: '#22c55e', bgColor: 'bg-green-500/10', label: 'LOW RISK' };
+};
+
+export const formatRisk = (riskPercent) => (parseFloat(riskPercent) || 0).toFixed(1) + '%';
+
 // ── Roles & Tier ──────────────────────────────────────────────────────────────
 
 export async function fetchRoles() {
