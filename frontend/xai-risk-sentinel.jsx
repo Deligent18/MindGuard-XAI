@@ -1287,6 +1287,7 @@ function ClinicalDashboard({ user, onLogout }) {
                       </p>
                     )
                   )}
+
                   {user.role==="welfare"&& xaiView!=='lime' && (
                     <div style={{fontSize:11,color:"rgba(255,255,255,0.25)",marginTop:10,fontStyle:"italic"}}>
                       Full SHAP values visible to Mental Health Counsellors only.

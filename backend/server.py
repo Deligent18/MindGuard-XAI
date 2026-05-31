@@ -802,7 +802,7 @@ async def get_student(student_id: str, current_user: dict = Depends(get_current_
             "being computed in the background",
             "shap explanation pending",
         )
-        explanation_missing = not _expl or any(p in _expl.lower() for p in _PLACEHOLDER_PHRASES)
+        explanation_missing = (not _expl) or any(p in _expl.lower() for p in _PLACEHOLDER_PHRASES)
         if shap_missing or explanation_missing:
             if ML_PIPELINE_AVAILABLE:
                 try:
