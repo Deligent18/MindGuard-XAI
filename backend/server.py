@@ -76,7 +76,24 @@ def _load_csv_students_fast():
         # convert_csv_to_student_format already sets tier/risk/shap.
         # Override explanation/intervention to show background-computing message.
         for s in students:
+            # Provide an informative placeholder explanation and lightweight feature contributions
             s["explanation"]  = "ML predictions are being computed in the background."
+            # Create a simple SHAP-like contribution list from rule-based feature importance
+            try:
+                contribs = data_service.risk_feature_contributions(s)
+                # Map to SHAP-like structure expected by frontend
+                s["shap"] = [
+                    {
+                        "feature": c.get("feature"),
+                        "value": c.get("weight", 0.0),
+                        "dir": c.get("dir", 1),
+                        "contribution_percent": round(abs(c.get("weight", 0.0)) * 100, 1),
+                        "feature_value": c.get("value")
+                    }
+                    for c in contribs[:6]
+                ]
+            except Exception:
+                s["shap"] = []
             s["intervention"] = ["Please check back in a few minutes for full recommendations."]
             s["lastUpdated"]  = "computing…"
         print(f"[startup] Loaded {len(students)} students from CSV (fast path)")
@@ -152,12 +169,58 @@ def _run_ml_predictions_background():
 
         df_eng = pipeline.engineer_features(df_full.copy())
         X      = pipeline.prepare_features(df_eng)
-        preds  = pipeline.model.predict(X)
-        probs  = pipeline.model.predict_proba(X)
+        preds = pipeline.model.predict(X)
+        # Some fitted models (e.g. XGBRegressor) do not implement `predict_proba`.
+        # Handle both classifier (with predict_proba) and regressor outputs gracefully.
+        try:
+            probs = pipeline.model.predict_proba(X)
+        except Exception:
+            # Fallback: if preds are floats in [0,1], treat them as risk scores
+            # and synthesize a 3-class probability vector (low, medium, high).
+            preds_arr = np.asarray(preds)
+            if np.issubdtype(preds_arr.dtype, np.floating):
+                # Ensure values are in [0,1]
+                risk_scores_fallback = np.clip(preds_arr.astype(float), 0.0, 1.0)
+                probs = np.zeros((len(risk_scores_fallback), 3), dtype=float)
+                # Heuristic mapping: high class probability ~ risk, medium ~ mid-range, low ~ complement
+                probs[:, 2] = risk_scores_fallback
+                probs[:, 1] = np.clip((risk_scores_fallback - 0.35) * 1.6, 0.0, 1.0) * (1.0 - probs[:, 2])
+                probs[:, 0] = 1.0 - probs[:, 1] - probs[:, 2]
+            else:
+                # preds are likely integer class labels — synthesize one-hot probabilities
+                probs = np.zeros((len(preds), 3), dtype=float)
+                for idx, p in enumerate(preds):
+                    try:
+                        probs[idx, int(p)] = 1.0
+                    except Exception:
+                        probs[idx, 0] = 1.0
 
         risk_map = {0: 'low', 1: 'medium', 2: 'high'}
-        risk_scores = probs[:, 2] + 0.5 * probs[:, 1]
+
+        # Probability smoothing to prevent risk collapsing to only 0/50/100
+        # (when predict_proba outputs are near one-hot).
+        # We apply epsilon smoothing then renormalize.
+        eps = 0.05
+        probs = probs * (1 - 2 * eps) + eps
+        probs = probs / probs.sum(axis=1, keepdims=True)
+
+        # Probability smoothing — prevents discrete 0%/50%/100% scores
+        # when XGBoost returns near-one-hot probability vectors.
+        smoothed_proba = np.array(probs, dtype=float)
+        for i in range(len(smoothed_proba)):
+            max_val = np.max(smoothed_proba[i])
+            if max_val > 0.95:
+                max_idx = np.argmax(smoothed_proba[i])
+                smoothed_proba[i][max_idx] = max_val * 0.95
+                other_sum = 1.0 - smoothed_proba[i][max_idx]
+                for j in range(len(smoothed_proba[i])):
+                    if j != max_idx:
+                        smoothed_proba[i][j] = other_sum / (len(smoothed_proba[i]) - 1)
+
+        risk_scores = smoothed_proba[:, 2] + 0.5 * smoothed_proba[:, 1]
         risk_scores = np.clip(risk_scores, 0, 1)
+
+
 
         # ── Step 4: per-student SHAP is deferred ─────────────────────────────
         # The earlier implementation computed only a global feature-importance
@@ -174,17 +237,25 @@ def _run_ml_predictions_background():
         for i, student in enumerate(students):
             if i >= len(preds):
                 break
-            tier  = risk_map.get(int(preds[i]), 'low')
-            risk  = float(risk_scores[i])
+            # If model produced continuous predictions (regressor), map to nearest
+            # training label centers to reproduce original label distribution.
+            try:
+                val = float(preds[i])
+                # centers correspond to training label mapping used in train_model
+                centers = np.array([0.25, 0.62, 0.88])
+                idx = int(np.argmin(np.abs(centers - val)))
+                tier = {0: 'low', 1: 'medium', 2: 'high'}.get(idx, 'low')
+            except Exception:
+                try:
+                    tier = risk_map.get(int(preds[i]), 'low')
+                except Exception:
+                    tier = 'low'
+            risk = float(risk_scores[i])
             s = dict(student)
             s['risk']        = risk
             s['tier']        = tier
-            s['shap']        = global_shap   # same global shap for all (fast path)
-            s['explanation'] = (
-                f"{s.get('name','Student')} has a {tier} risk score of "
-                f"{round(risk*100)}%. Key factors: "
-                + ", ".join(g['feature'] for g in global_shap[:3]) + "."
-            )
+            s['shap']        = []
+            s['explanation'] = "ML predictions are being computed in the background."
             s['intervention'] = (
                 ["Immediate counsellor contact within 24 hours",
                  "Safety planning assessment", "Academic load review"]
@@ -565,6 +636,7 @@ async def get_students(
     page: int = 1,
     limit: int = 50,
     tier: Optional[str] = None,
+    department: Optional[str] = None,
     search: Optional[str] = None,
 ):
     """Paginated students endpoint supporting 1200+ students.
@@ -576,11 +648,25 @@ async def get_students(
     role = current_user["role"]
     limit = min(limit, 200)
     filtered = source
+
+    def department_name(programme: str) -> str:
+        if not programme:
+            return "Unknown"
+        parts = programme.split()
+        if len(parts) <= 1:
+            return programme
+        return " ".join(parts[1:]).strip()
+
     if tier:
         filtered = [s for s in filtered if s.get("tier") == tier]
+    if department:
+        dept = department.strip().lower()
+        filtered = [s for s in filtered if dept == department_name(s.get("programme", "")).lower()]
     if search:
         q = search.lower()
-        filtered = [s for s in filtered if q in s.get("name","").lower() or q in s.get("id","").lower()]
+        filtered = [s for s in filtered if q in s.get("name","").lower() or q in s.get("id","").lower() or q in s.get("programme","").lower()]
+    # Sort students by descending risk so counsellors see the highest-risk students first.
+    filtered = sorted(filtered, key=lambda s: float(s.get("risk", 0)), reverse=True)
     total = len(filtered)
     start = (page - 1) * limit
     page_data = filtered[start:start + limit]
@@ -599,6 +685,127 @@ async def predictions_status(current_user: dict = Depends(get_current_user)):
         "loading":    PREDICTIONS_LOADING,
         "total":      len(TRAFFIC_STUDENTS),
     }
+
+
+@app.get("/analytics")
+async def get_analytics(current_user: dict = Depends(get_current_user)):
+    """
+    Get analytics summaries by faculty, department and class.
+    Includes: total students, risk distribution, faculty/department/class breakdowns,
+    and top 12 high-risk students for immediate action.
+    """
+    try:
+        source = TRAFFIC_STUDENTS if TRAFFIC_STUDENTS else STUDENTS
+
+        if not source:
+            return {
+                "totalStudents": 0,
+                "counts": {"total": 0, "percentage": 0, "high": 0, "medium": 0, "low": 0,
+                          "highPct": 0, "mediumPct": 0, "lowPct": 0, "avgRisk": 0},
+                "faculties": [],
+                "departments": [],
+                "classes": [],
+                "topStudents": [],
+            }
+
+        FACULTY_MAP = {
+            "BSc": "Science",
+            "BEng": "Engineering",
+            "BCom": "Commerce",
+            "BA": "Arts",
+        }
+
+        def faculty_name(programme: str) -> str:
+            if not programme:
+                return "Unknown"
+            programme = programme.strip()
+            for prefix, faculty in FACULTY_MAP.items():
+                if programme.startswith(prefix):
+                    return faculty
+            return programme.split()[0] if programme else "Unknown"
+
+        def department_name(programme: str) -> str:
+            if not programme:
+                return "Unknown"
+            parts = programme.split()
+            if len(parts) <= 1:
+                return programme
+            return " ".join(parts[1:]).strip()
+
+        def summarize(items, total_base=None):
+            total = len(items)
+            base = total_base if total_base is not None else len(source)
+            high = len([s for s in items if s.get("tier") == "high"])
+            medium = len([s for s in items if s.get("tier") == "medium"])
+            low = len([s for s in items if s.get("tier") == "low"])
+            avg_risk = sum(float(s.get("risk", 0)) for s in items) / max(total, 1)
+            return {
+                "total": total,
+                "percentage": round(total / max(base, 1) * 100, 1),
+                "high": high,
+                "medium": medium,
+                "low": low,
+                "highPct": round(high / max(total, 1) * 100, 1),
+                "mediumPct": round(medium / max(total, 1) * 100, 1),
+                "lowPct": round(low / max(total, 1) * 100, 1),
+                "avgRisk": round(avg_risk, 3),
+            }
+
+        faculties = {}
+        departments = {}
+        years = {}
+
+        for student in source:
+            faculty = faculty_name(student.get("programme", ""))
+            department = department_name(student.get("programme", ""))
+            year = f"Year {student.get('year', 1)}"
+            faculties.setdefault(faculty, []).append(student)
+            departments.setdefault(department, []).append(student)
+            years.setdefault(year, []).append(student)
+
+        top_students = sorted(source, key=lambda s: float(s.get("risk", 0)), reverse=True)[:12]
+
+        return {
+            "totalStudents": len(source),
+            "counts": summarize(source),
+            "faculties": [
+                {"faculty": k, **summarize(v)}
+                for k, v in sorted(faculties.items(), key=lambda kv: kv[0])
+            ],
+            "departments": [
+                {"department": k, **summarize(v)}
+                for k, v in sorted(departments.items(), key=lambda kv: kv[0])
+            ],
+            "classes": [
+                {"class": k, **summarize(v)}
+                for k, v in sorted(years.items(), key=lambda kv: kv[0])
+            ],
+            "topStudents": [
+                {
+                    "id": s.get("id"),
+                    "name": s.get("name"),
+                    "programme": s.get("programme"),
+                    "year": s.get("year"),
+                    "risk": round(float(s.get("risk", 0)) * 100),
+                    "tier": s.get("tier"),
+                    "attendance": s.get("attendance"),
+                    "lmsLogins": s.get("lmsLogins"),
+                    "facilityAccess": s.get("facilityAccess"),
+                }
+                for s in top_students
+            ],
+        }
+    except Exception as e:
+        print(f"[analytics] Error: {e}")
+        raise HTTPException(status_code=500, detail=f"Analytics error: {str(e)}")
+
+
+
+@app.post("/students/assess")
+async def assess_student(assessment: dict, current_user: dict = Depends(get_current_user)):
+    """Run a live prediction from manual feature contributions."""
+    result = data_service.manual_assessment(assessment)
+    return result
 
 
 @app.post("/students/batch")
@@ -640,11 +847,18 @@ async def get_student(student_id: str, current_user: dict = Depends(get_current_
 
     # Only counsellor/admin should receive SHAP/explanation.
     if role in ["counsellor", "admin"]:
-        shap_missing = (not student.get("shap")) or (len(student.get("shap")) == 0)
-        explanation_missing = not student.get("explanation")
+        shap_missing = (not student.get("shap")) or (len(student.get("shap", [])) == 0)
+        _expl = student.get("explanation") or ""
+        _PLACEHOLDER_PHRASES = (
+            "ml predictions are being computed",
+            "being computed in the background",
+            "shap explanation pending",
+        )
+        explanation_missing = (not _expl) or any(p in _expl.lower() for p in _PLACEHOLDER_PHRASES)
         if shap_missing or explanation_missing:
             if ML_PIPELINE_AVAILABLE:
                 try:
+                    print(f"[on-demand] Computing ML prediction for student {student.get('id')}")
                     # Compute full per-student prediction including SHAP + text.
                     prediction = data_service.predict_single_student(student)
                     student["risk"] = prediction.get("risk", student.get("risk"))
@@ -661,6 +875,9 @@ async def get_student(student_id: str, current_user: dict = Depends(get_current_
                         "data": filter_student_by_role(student, role)
                     })
                 except Exception as e:
+                    import traceback as _tb
+                    print(f"[on-demand] Prediction error for {student.get('id')}: {e}")
+                    _tb.print_exc()
                     # Keep response stable; do not fail the request.
                     student["explanation"] = student.get("explanation") or "SHAP explanation pending due to computation error."
 
@@ -754,14 +971,11 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
     Get system statistics from trained ML model data
     """
 
-
-    # Use whichever student list is available (fast CSV or ML-enriched)
-    # Never call the blocking load_students_with_predictions() here
-
+    source = TRAFFIC_STUDENTS if TRAFFIC_STUDENTS else STUDENTS
     counts = {
-        "high": len([s for s in STUDENTS if s.get("tier") == "high"]),
-        "medium": len([s for s in STUDENTS if s.get("tier") == "medium"]),
-        "low": len([s for s in STUDENTS if s.get("tier") == "low"]),
+        "high": len([s for s in source if s.get("tier") == "high"]),
+        "medium": len([s for s in source if s.get("tier") == "medium"]),
+        "low": len([s for s in source if s.get("tier") == "low"]),
     }
 
     # Get model info from pipeline if available

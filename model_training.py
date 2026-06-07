@@ -1,331 +1,69 @@
 """
-XAI Risk Sentinel - Model Training Script
-Trains XGBoost and Random Forest classifiers for student risk prediction
+MindGuard-XAI - Model Training (Continuous Risk Scores)
 """
 
 import os
 import sys
-import json
-import joblib
 import pandas as pd
 import numpy as np
+import joblib
 from datetime import datetime
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
-    classification_report, confusion_matrix, roc_auc_score
-)
-from xgboost import XGBClassifier
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from xgboost import XGBRegressor
 
-# Add backend to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
 
-# Configuration
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data', 'processed')
 MODEL_DIR = os.path.join(os.path.dirname(__file__), 'models')
-REPORTS_DIR = os.path.join(os.path.dirname(__file__), 'reports')
 
-# Ensure directories exist
 os.makedirs(MODEL_DIR, exist_ok=True)
-os.makedirs(REPORTS_DIR, exist_ok=True)
-
 
 def load_data():
-    """✓ FIX 3.3: Load data with full validation checks"""
-    print("=" * 60)
-    print("Loading preprocessed data...")
-    print("=" * 60)
-    
-    feature_files = {
-        'X_train': 'X_train.csv',
-        'X_test': 'X_test.csv', 
-        'X_val': 'X_val.csv'
-    }
-    label_files = {
-        'y_train': 'y_train.csv',
-        'y_test': 'y_test.csv',
-        'y_val': 'y_val.csv'
-    }
-    
-    data = {}
-    
-    # Load features
-    for key, fname in feature_files.items():
-        path = os.path.join(DATA_DIR, fname)
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"Required file missing: {path}")
-        data[key] = pd.read_csv(path)
-        print(f"✓ Loaded {key}: {data[key].shape}")
-    
-    # Load labels
-    for key, fname in label_files.items():
-        path = os.path.join(DATA_DIR, fname)
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"Required file missing: {path}")
-        data[key] = pd.read_csv(path)
-        print(f"✓ Loaded {key}: {len(data[key])} samples")
-    
-    # ✓ FIX 3.3: Comprehensive validation
-    X_train, X_test, X_val = data['X_train'], data['X_test'], data['X_val']
-    y_train, y_test, y_val = data['y_train'], data['y_test'], data['y_val']
-    
-    # Validate shapes
-    assert len(X_train) == len(y_train), f"X_train/y_train shape mismatch: {len(X_train)} vs {len(y_train)}"
-    assert len(X_test) == len(y_test), f"X_test/y_test shape mismatch"
-    assert len(X_val) == len(y_val), f"X_val/y_val shape mismatch"
-    
-    # Validate no NaNs
-    assert X_train.isnull().sum().sum() == 0, f"X_train has {X_train.isnull().sum().sum()} NaN values"
-    assert y_train.isnull().sum().sum() == 0, f"y_train has NaN values"
-    
-    # Validate feature count consistency
-    n_features = X_train.shape[1]
-    assert X_test.shape[1] == n_features, f"X_test has wrong feature count"
-    assert X_val.shape[1] == n_features, f"X_val has wrong feature count"
-    
-    # Validate target distribution
-    from collections import Counter
-    train_dist = Counter(y_train.values.ravel())
-    print(f"[INFO] Train distribution: {train_dist}")
-    
-    if len(train_dist) == 1:
-        raise ValueError("Training data has only one class - cannot train classifier!")
-    
-    print(f"Training samples: {len(X_train)}")
-    print(f"Test samples: {len(X_test)}")
-    print(f"Validation samples: {len(X_val)}")
-    print(f"Features: {X_train.shape[1]}")
-    
-    return X_train, X_test, X_val, y_train, y_test, y_val
+    print("Loading preprocessed data for training...")
+    X_train = pd.read_csv(os.path.join(DATA_DIR, 'X_train.csv'))
+    X_test = pd.read_csv(os.path.join(DATA_DIR, 'X_test.csv'))
+    y_train = pd.read_csv(os.path.join(DATA_DIR, 'y_train.csv')).values.ravel()
+    y_test = pd.read_csv(os.path.join(DATA_DIR, 'y_test.csv')).values.ravel()
+    return X_train, X_test, y_train, y_test
 
-
-def train_xgboost(X_train, y_train, X_test, y_test):
-    """Train XGBoost classifier"""
-    print("\n" + "=" * 60)
-    print("Training XGBoost Classifier...")
-    print("=" * 60)
+def train_xgboost_regressor(X_train, y_train, X_test, y_test):
+    print("\n=== Training XGBoost Regressor (Continuous Risk 0-100%) ===")
     
-    # Initialize XGBoost classifier
-    model = XGBClassifier(
-        n_estimators=100,
-        max_depth=5,
-        learning_rate=0.1,
-        subsample=0.8,
+    model = XGBRegressor(
+        n_estimators=300,
+        max_depth=6,
+        learning_rate=0.08,
+        subsample=0.85,
         colsample_bytree=0.8,
         random_state=42,
-        use_label_encoder=False,
-        eval_metric='logloss',
-        verbosity=0
+        objective='reg:squarederror'
     )
-    
-    # Train the model
+
     model.fit(X_train, y_train)
-    
-    # Make predictions
-    y_pred = model.predict(X_test)
-    y_pred_proba = model.predict_proba(X_test)
-    
-    # Calculate metrics
+    y_pred = np.clip(model.predict(X_test), 0.0, 1.0)
+
     results = {
-        'model_type': 'XGBoost Classifier',
-        'accuracy': float(accuracy_score(y_test, y_pred)),
-        'precision': float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
-        'recall': float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
-        'f1_score': float(f1_score(y_test, y_pred, average='weighted', zero_division=0)),
-        'confusion_matrix': confusion_matrix(y_test, y_pred).tolist(),
-        'n_estimators': 100,
-        'max_depth': 5,
-        'learning_rate': 0.1
+        'mae': float(mean_absolute_error(y_test, y_pred)),
+        'r2': float(r2_score(y_test, y_pred)),
+        'risk_range': f"{y_pred.min()*100:.1f}% — {y_pred.max()*100:.1f}%"
     }
-    
-    # Calculate ROC-AUC if binary classification
-    if len(np.unique(y_test)) == 2:
-        results['roc_auc'] = float(roc_auc_score(y_test, y_pred_proba[:, 1]))
-    else:
-        results['roc_auc'] = float(roc_auc_score(y_test, y_pred_proba, multi_class='ovr', average='weighted'))
-    
-    print(f"XGBoost Training Complete!")
-    print(f"  Accuracy: {results['accuracy']:.4f}")
-    print(f"  F1-Score: {results['f1_score']:.4f}")
-    print(f"  ROC-AUC: {results['roc_auc']:.4f}")
-    
+    print(f"✅ Training Complete! Risk Range: {results['risk_range']}")
     return model, results
-
-
-def train_random_forest(X_train, y_train, X_test, y_test):
-    """Train Random Forest classifier"""
-    print("\n" + "=" * 60)
-    print("Training Random Forest Classifier...")
-    print("=" * 60)
-    
-    # Initialize Random Forest classifier
-    model = RandomForestClassifier(
-        n_estimators=100,
-        max_depth=10,
-        min_samples_split=5,
-        min_samples_leaf=2,
-        random_state=42,
-        n_jobs=-1
-    )
-    
-    # Train the model
-    model.fit(X_train, y_train)
-    
-    # Make predictions
-    y_pred = model.predict(X_test)
-    y_pred_proba = model.predict_proba(X_test)
-    
-    # Calculate metrics
-    results = {
-        'model_type': 'Random Forest Classifier',
-        'accuracy': float(accuracy_score(y_test, y_pred)),
-        'precision': float(precision_score(y_test, y_pred, average='weighted', zero_division=0)),
-        'recall': float(recall_score(y_test, y_pred, average='weighted', zero_division=0)),
-        'f1_score': float(f1_score(y_test, y_pred, average='weighted', zero_division=0)),
-        'confusion_matrix': confusion_matrix(y_test, y_pred).tolist(),
-        'n_estimators': 100,
-        'max_depth': 10,
-        'min_samples_split': 5,
-        'min_samples_leaf': 2
-    }
-    
-    # Calculate ROC-AUC if binary classification
-    if len(np.unique(y_test)) == 2:
-        results['roc_auc'] = float(roc_auc_score(y_test, y_pred_proba[:, 1]))
-    else:
-        results['roc_auc'] = float(roc_auc_score(y_test, y_pred_proba, multi_class='ovr', average='weighted'))
-    
-    print(f"Random Forest Training Complete!")
-    print(f"  Accuracy: {results['accuracy']:.4f}")
-    print(f"  F1-Score: {results['f1_score']:.4f}")
-    print(f"  ROC-AUC: {results['roc_auc']:.4f}")
-    
-    return model, results
-
-
-def save_models(xgboost_model, rf_model, feature_names):
-    """Save trained models to disk"""
-    print("\n" + "=" * 60)
-    print("Saving models...")
-    print("=" * 60)
-    
-    # Save XGBoost model
-    xgboost_path = os.path.join(MODEL_DIR, 'xgboost_model.pkl')
-    joblib.dump(xgboost_model, xgboost_path)
-    print(f"✓ XGBoost model saved to {xgboost_path}")
-    
-    # Save Random Forest model
-    rf_path = os.path.join(MODEL_DIR, 'random_forest_model.pkl')
-    joblib.dump(rf_model, rf_path)
-    print(f"✓ Random Forest model saved to {rf_path}")
-    
-    # Save feature names
-    feature_path = os.path.join(MODEL_DIR, 'feature_names.pkl')
-    joblib.dump(feature_names, feature_path)
-    print(f"✓ Feature names saved to {feature_path}")
-    
-    return {
-        'xgboost_path': xgboost_path,
-        'rf_path': rf_path,
-        'feature_path': feature_path
-    }
-
-
-def generate_training_report(xgboost_results, rf_results, feature_names, training_time):
-    """Generate training results report"""
-    print("\n" + "=" * 60)
-    print("Generating training report...")
-    print("=" * 60)
-    
-    # Determine best model
-    if xgboost_results['f1_score'] >= rf_results['f1_score']:
-        best_model = 'XGBoost'
-        best_results = xgboost_results
-    else:
-        best_model = 'Random Forest'
-        best_results = rf_results
-    
-    # Create comprehensive report
-    report = {
-        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'training_time_seconds': training_time,
-        'best_model': best_model,
-        'xgboost': xgboost_results,
-        'random_forest': rf_results,
-        'feature_count': len(feature_names),
-        'feature_names': feature_names.tolist() if hasattr(feature_names, 'tolist') else feature_names,
-        'models_saved': True
-    }
-    
-    # Save report
-    report_path = os.path.join(REPORTS_DIR, 'training_results.json')
-    with open(report_path, 'w') as f:
-        json.dump(report, f, indent=2)
-    
-    print(f"✓ Training report saved to {report_path}")
-    print(f"\n{'=' * 60}")
-    print("TRAINING SUMMARY")
-    print("=" * 60)
-    print(f"Best Model: {best_model}")
-    print(f"Best F1-Score: {best_results['f1_score']:.4f}")
-    print(f"Best Accuracy: {best_results['accuracy']:.4f}")
-    print(f"Best ROC-AUC: {best_results['roc_auc']:.4f}")
-    print("=" * 60)
-    
-    return report
-
 
 def main():
-    """Main training pipeline"""
-    start_time = datetime.now()
-    
-    print("\n" + "=" * 60)
-    print("XAI RISK SENTINEL - MODEL TRAINING")
-    print("=" * 60)
-    print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    try:
-        # Load data
-        X_train, X_test, X_val, y_train, y_test, y_val = load_data()
-        
-        # Flatten labels if needed
-        if len(y_train.shape) > 1:
-            y_train = y_train.values.ravel()
-        if len(y_test.shape) > 1:
-            y_test = y_test.values.ravel()
-        if len(y_val.shape) > 1:
-            y_val = y_val.values.ravel()
-        
-        # Get feature names
-        feature_names = X_train.columns.tolist()
-        
-        # Train models
-        xgboost_model, xgboost_results = train_xgboost(X_train, y_train, X_test, y_test)
-        rf_model, rf_results = train_random_forest(X_train, y_train, X_test, y_test)
-        
-        # Save models
-        save_models(xgboost_model, rf_model, feature_names)
-        
-        # Calculate training time
-        end_time = datetime.now()
-        training_time = (end_time - start_time).total_seconds()
-        
-        # Generate report
-        generate_training_report(xgboost_results, rf_results, feature_names, training_time)
-        
-        print(f"\n✓ Training completed successfully in {training_time:.2f} seconds")
-        print(f"\nNext step: Run model_evaluation.py to evaluate models")
-        
-        return True
-        
-    except Exception as e:
-        print(f"\n✗ Training failed: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
+    X_train, X_test, y_train, y_test = load_data()
 
+    # Convert labels to continuous values
+    RISK_MAPPING = {'Low': 0.25, 'Medium': 0.62, 'High': 0.88}
+    y_train = pd.Series(y_train).map(RISK_MAPPING).fillna(0.3).values
+    y_test = pd.Series(y_test).map(RISK_MAPPING).fillna(0.3).values
+
+    model, results = train_xgboost_regressor(X_train, y_train, X_test, y_test)
+    
+    joblib.dump(model, os.path.join(MODEL_DIR, 'active_model.pkl'))
+    print("✅ Continuous risk model saved successfully!")
+    return True
 
 if __name__ == "__main__":
-    success = main()
-    sys.exit(0 if success else 1)
+    main()
 

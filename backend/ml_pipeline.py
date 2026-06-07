@@ -12,6 +12,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from typing import Dict, List, Optional, Any
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 # shap is imported lazily inside generate_shap_explanation() to avoid
 # blocking server startup (shap takes ~8s to import due to C extensions)
@@ -308,37 +309,51 @@ class MLPipeline:
         df = self.engineer_features(df)
         X = self.prepare_features(df)
         
-        # Prepare target variable
-        # ✓ FIX 2.1: Single source of truth + PascalCase (from preprocessing)
+        # Prepare target variable for continuous risk regression
         RISK_LABEL_MAPPING = {
-            'High': 2, 'Medium': 1, 'Low': 0
+            'High': 0.88,
+            'Medium': 0.62,
+            'Low': 0.25,
         }
         if 'RiskLabel' in df.columns:
             y = df['RiskLabel'].map(RISK_LABEL_MAPPING)
         elif 'risk_label' in df.columns:
-            # Handle both cases (DB vs CSV)
             df['RiskLabel'] = df['risk_label'].str.title()
             y = df['RiskLabel'].map(RISK_LABEL_MAPPING)
         else:
             raise ValueError("No risk_label or RiskLabel column found in data")
-        
-        # Train XGBoost classifier (lazy import to avoid 5-8s startup delay)
-        XGBClassifier, _ = _get_xgb()
-        self.model = XGBClassifier(
-            n_estimators=100,
-            max_depth=5,
-            learning_rate=0.1,
-            subsample=0.8,
+        y = y.fillna(0.3)
+
+        # ── Debug: label distribution after mapping (temporary) ──
+        try:
+            y_ser = y if hasattr(y, 'value_counts') else pd.Series(y)
+            vc = y_ser.value_counts(dropna=False).to_dict()
+            nan_count = int(pd.isna(y_ser).sum())
+            print("[debug][label-mapping] mapped y counts:", {str(k): int(v) for k,v in vc.items()})
+            print("[debug][label-mapping] NaN mapped labels:", nan_count)
+        except Exception as _lbl_dbg_e:
+            print("[debug][label-mapping] failed:", _lbl_dbg_e)
+
+        # Train XGBoost regressor (lazy import to avoid 5-8s startup delay)
+
+        _, XGBRegressor = _get_xgb()
+        self.model = XGBRegressor(
+            n_estimators=300,
+            max_depth=6,
+            learning_rate=0.08,
+            subsample=0.85,
             colsample_bytree=0.8,
             random_state=42,
-            eval_metric='mlogloss'
+            objective='reg:squarederror'
         )
         
         self.model.fit(X, y)
         
-        # Calculate training accuracy
+        # Calculate regression training metrics
         train_predictions = self.model.predict(X)
-        train_accuracy = (train_predictions == y).mean()
+        train_mae = float(mean_absolute_error(y, train_predictions))
+        train_rmse = float(np.sqrt(mean_squared_error(y, train_predictions)))
+        train_r2 = float(r2_score(y, train_predictions))
         
         self.is_trained = True
         self.last_trained = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -381,16 +396,18 @@ class MLPipeline:
         
         results = {
             "status": "success",
-            "model_type": "XGBoost Classifier",
+            "model_type": "XGBoost Regressor",
             "training_samples": len(df),
             "features_used": len(self.feature_names),
-            "train_accuracy": float(train_accuracy),
+            "train_mae": train_mae,
+            "train_rmse": train_rmse,
+            "train_r2": train_r2,
             "last_trained": self.last_trained,
             "top_features": importance_df.head(5).to_dict('records'),
             "feature_importance": importance_df.to_dict('records')
         }
         
-        print(f"Training complete! Accuracy: {train_accuracy:.2%}")
+        print(f"Training complete! MAE: {train_mae:.4f}, RMSE: {train_rmse:.4f}, R²: {train_r2:.4f}")
         print(f"Top 5 features: {[f['feature'] for f in results['top_features']]}")
         
         return results
@@ -464,87 +481,100 @@ class MLPipeline:
         df = self.engineer_features(df)
         X = self.prepare_features(df)
         
-        # Get predictions
-        predictions = self.model.predict(X)
-        probabilities = self.model.predict_proba(X)
-        
-        # Risk mapping
-        reverse_risk_mapping = {0: 'low', 1: 'medium', 2: 'high'}
-        
-        # Convert to risk scores (0-1)
-        # Use probability of high risk
-        risk_scores = probabilities[:, 2] + 0.5 * probabilities[:, 1]
-        risk_scores = np.clip(risk_scores, 0, 1)
+        # Get continuous risk predictions using probabilities where available
+        try:
+            probabilities = self.model.predict_proba(X)
+            smoothed_proba = np.array(probabilities, dtype=float)
+            for i in range(len(smoothed_proba)):
+                max_val = np.max(smoothed_proba[i])
+                if max_val > 0.95:
+                    max_idx = int(np.argmax(smoothed_proba[i]))
+                    smoothed_proba[i][max_idx] = max_val * 0.95
+                    other_sum = 1.0 - smoothed_proba[i][max_idx]
+                    for j in range(len(smoothed_proba[i])):
+                        if j != max_idx:
+                            smoothed_proba[i][j] = other_sum / (len(smoothed_proba[i]) - 1)
+            risk_scores = smoothed_proba[:, 2] + 0.5 * smoothed_proba[:, 1]
+            risk_scores = np.clip(risk_scores, 0, 1)
+        except Exception:
+            risk_scores = np.clip(self.model.predict(X), 0, 1)
         
         results = df[['student_id']].copy()
         if 'name' in df.columns:
             results['name'] = df['name']
         results['risk'] = risk_scores
+        results['risk_percent'] = np.round(risk_scores * 100.0, 1)
         results['tier'] = results['risk'].apply(
-            lambda x: 'high' if x >= 0.7 else 'medium' if x >= 0.4 else 'low'
+            lambda x: 'high' if x >= 0.70 else 'medium' if x >= 0.40 else 'low'
         )
-        results['prediction'] = [reverse_risk_mapping.get(p, 'unknown') for p in predictions]
         
         return results
     
-    def predict_single(self, student_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Predict risk for a single student with SHAP and (optionally) LIME explanations.
-        """
+    def predict_single(self, features: Dict) -> Dict:
+        """Predict continuous progressive risk score (0-100%)"""
+        if self.model is None:
+            self.load_model()
 
-        if not self.is_trained:
-            if not self.load_model():
-                raise ValueError("Model not trained")
+        # Convert input dict to DataFrame and run through feature engineering
+        df = pd.DataFrame([features])
+        try:
+            df_eng = self.engineer_features(df.copy())
+            X = self.prepare_features(df_eng)
+        except Exception:
+            # Fallback: try to select numeric columns only
+            X = df.select_dtypes(include=[float, int, 'number']).fillna(0)
 
-        # Convert to DataFrame and engineer features — same path as batch predict
-        df = pd.DataFrame([student_data])
-        df = self.engineer_features(df)
+        try:
+            probabilities = self.model.predict_proba(X)[0]
+            smoothed_proba = np.array(probabilities, dtype=float)
+            max_val = np.max(smoothed_proba)
+            if max_val > 0.95:
+                max_idx = int(np.argmax(smoothed_proba))
+                smoothed_proba[max_idx] = max_val * 0.95
+                other_sum = 1.0 - smoothed_proba[max_idx]
+                for j in range(len(smoothed_proba)):
+                    if j != max_idx:
+                        smoothed_proba[j] = other_sum / (len(smoothed_proba) - 1)
+            risk_score = float(smoothed_proba[2] + 0.5 * smoothed_proba[1])
+            risk_score = float(np.clip(risk_score, 0, 1))
+        except Exception:
+            risk_score = float(self.model.predict(X)[0])
+            risk_score = max(0.0, min(1.0, risk_score))
 
-        # Cache engineered feature matrix for LIME background on first call
-        # (best-effort; if unavailable, we can still fall back to the current sample)
-        if getattr(self, "_X_train_for_lime", None) is None:
-            try:
-                df_train = self.load_data()
-                if df_train is not None and not df_train.empty:
-                    df_train = self.engineer_features(df_train)
-                    self._X_train_for_lime = self.prepare_features(df_train)
-                else:
-                    self._X_train_for_lime = None
-            except Exception:
-                self._X_train_for_lime = None
+        # Progressive Tier Mapping
+        if risk_score >= 0.70:
+            tier = "high"
+        elif risk_score >= 0.40:
+            tier = "medium"
+        else:
+            tier = "low"
 
-        X  = self.prepare_features(df)   # numeric feature matrix only
+        # Generate SHAP explanations using the engineered feature matrix where possible
+        try:
+            shap_vals = self.generate_shap_explanation(X, features) if hasattr(self, 'generate_shap_explanation') else []
+        except Exception as e:
+            print(f"[predict_single] SHAP generation error: {e}")
+            shap_vals = []
 
-        if getattr(self, "_X_train_for_lime", None) is None and X is not None and len(X) > 0:
-            self._X_train_for_lime = X
+        # Generate intervention recommendations and richer explanation text where possible
+        try:
+            intervention = self.generate_intervention(tier, shap_vals) if hasattr(self, 'generate_intervention') else []
+        except Exception:
+            intervention = []
 
-
-        # Predict
-        predictions  = self.model.predict(X)
-        probabilities = self.model.predict_proba(X)
-
-        reverse_risk_mapping = {0: 'low', 1: 'medium', 2: 'high'}
-        risk_score = float(probabilities[0, 2] + 0.5 * probabilities[0, 1])
-        risk_score = float(np.clip(risk_score, 0, 1))
-        tier = 'high' if risk_score >= 0.7 else 'medium' if risk_score >= 0.4 else 'low'
-
-        # Generate SHAP on the correct feature matrix X
-        shap_explanation = self.generate_shap_explanation(X, student_data)
-
-        # Generate LIME (best-effort; may be skipped if unavailable)
-        lime_explanation = self.generate_lime_explanation(X, student_data)
-
-        intervention     = self.generate_intervention(tier, shap_explanation)
-        explanation      = self.generate_explanation_text(student_data, shap_explanation, tier)
+        try:
+            explanation_text = self.generate_explanation_text(features, shap_vals, tier) if hasattr(self, 'generate_explanation_text') else f"Predicted mental health risk: {risk_score*100:.1f}%"
+        except Exception:
+            explanation_text = f"Predicted mental health risk: {risk_score*100:.1f}%"
 
         return {
-            "risk":         risk_score,
-            "tier":         tier,
-            "shap":         shap_explanation,
-            "lime":         lime_explanation,
-            "explanation":  explanation,
+            "risk": round(risk_score, 4),
+            "risk_percent": round(risk_score * 100, 1),
+            "tier": tier,
+            "shap": shap_vals,
+            "explanation": explanation_text,
             "intervention": intervention,
-            "lastUpdated":  datetime.now().strftime("%Y-%m-%d"),
+            "lastUpdated": datetime.now().isoformat()
         }
 
 

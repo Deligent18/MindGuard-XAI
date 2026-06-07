@@ -6,11 +6,19 @@ echo "========================================"
 echo "  MindGuard-XAI — Backend Setup"
 echo "========================================"
 
-# Ensure python3-venv is available
-if ! python3 -m venv --help > /dev/null 2>&1; then
-    echo "Installing python3-venv..."
-    sudo apt install python3-venv python3-full -y
-fi
+echo "Checking and installing system-level dependencies..."
+# Added build-essential and python3-dev for packages like XGBoost/SHAP that may require compilation
+REQUIRED_SYSTEM_PKGS="python3-venv python3-full build-essential python3-dev curl"
+
+for pkg in $REQUIRED_SYSTEM_PKGS; do
+    if dpkg -s "$pkg" >/dev/null 2>&1; then
+        echo "  [OK] $pkg is already installed."
+    else
+        echo "  [MISSING] $pkg. Installing via apt..."
+        sudo apt-get update -qq
+        sudo apt-get install -y "$pkg"
+    fi
+done
 
 # Create venv if it doesn't exist
 if [ ! -d "venv" ]; then
@@ -19,10 +27,21 @@ if [ ! -d "venv" ]; then
 fi
 
 echo "Activating venv and installing dependencies..."
-source venv/bin/activate
+source venv/bin/activate || { echo "ERROR: Failed to activate virtual environment."; exit 1; }
 
-# Always use venv's pip/python to avoid PEP 668 (externally-managed-environment)
-./venv/bin/python -m pip install --upgrade pip
+echo "Checking for pip updates..."
+./venv/bin/python -m pip install --upgrade pip --quiet
+
+echo "Verifying core ML runtime dependencies..."
+# Check critical libraries that often have environment-specific issues
+for lib in numpy pandas xgboost shap sklearn imblearn; do
+    ./venv/bin/python -c "import $lib; print(f'  [OK] $lib version: ' + __import__('$lib').__version__)" 2>/dev/null || echo "  [MISSING/BROKEN] $lib"
+done
+
+if [ ! -f "requirements.txt" ]; then
+    echo "ERROR: requirements.txt not found in $(pwd). Please ensure you are in the backend directory."
+    exit 1
+fi
 
 # If requirements are hash-pinned (e.g., include --hash=...), pip may fail on hash mismatch.
 # Create a temp requirements file without hash directives.

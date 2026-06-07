@@ -90,26 +90,193 @@ class DataService:
                 "library_visits": row.get('library_visits', 0),
                 "after_hours_wifi": row.get('after_hours_wifi', 0),
                 "assignment_submissions": row.get('assignment_submissions', 0),
-                # risk_label from CSV used for rule-based phase and fast loading
                 "riskLabel": str(row.get('risk_label', 'low')).lower(),
-                "tier":      str(row.get('risk_label', 'low')).lower(),
-                "risk": 0.85 if str(row.get('risk_label','')).lower() == 'high'
-                        else 0.55 if str(row.get('risk_label','')).lower() == 'medium'
-                        else 0.20,
                 "shap": [],
                 "lime": [],
-                "explanation": f"ML predictions are being computed for {row.get('name', 'this student')}. Full SHAP-based explanation will appear shortly.",
-                "intervention": ["Full clinical recommendations will be available once ML predictions complete."],
                 "lastUpdated": "",
             }
+            # Compute a continuous score from the student features instead of using only the risk_label.
+            risk = self.calculate_risk_score(student)
+            tier = 'high' if risk >= 0.7 else 'medium' if risk >= 0.4 else 'low'
+            student["risk"] = risk
+            student["tier"] = tier
+            student["explanation"] = (
+                f"{student.get('name','This student')} has an estimated {tier} risk score of "
+                f"{round(risk*100)}%. Key contributing factors include "
+                + ", ".join([c['feature'] for c in self.risk_feature_contributions(student)[:3]])
+                + "."
+            )
+            # Populate lightweight SHAP-like contributions from rule-based contributors
+            try:
+                contribs = self.risk_feature_contributions(student)
+                student["shap"] = [
+                    {
+                        "feature": c.get("feature"),
+                        "value": c.get("weight", 0.0),
+                        "dir": c.get("dir", 1),
+                        "contribution_percent": round(abs(c.get("weight", 0.0)) * 100, 1),
+                        "feature_value": c.get("value")
+                    }
+                    for c in contribs[:6]
+                ]
+            except Exception:
+                student["shap"] = []
+            student["intervention"] = (
+                ["Immediate counsellor contact within 24 hours", "Safety planning assessment", "Academic load review"]
+                if tier == 'high' else
+                ["Proactive welfare check", "Academic support referral"]
+                if tier == 'medium' else
+                ["Standard wellness newsletter"]
+            )
             students.append(student)
-            
         return students
     
     # =========================================================================
-    # ML INTEGRATION
+    # RISK SCORING
     # =========================================================================
-    
+
+    def calculate_risk_score(self, student: Dict) -> float:
+        """Calculate a continuous risk score from student features."""
+        gpa = [float(v) for v in student.get('gpa', []) if v is not None]
+        current_gpa = gpa[-1] if gpa else 0.0
+        previous_gpa = gpa[-2] if len(gpa) > 1 else current_gpa
+        gpa_drop = max(0.0, previous_gpa - current_gpa) / 4.0
+
+        attendance = float(student.get('attendance', 0) or 0) / 100.0
+        attendance_risk = max(0.0, 0.75 - attendance) / 0.75
+
+        lms = float(student.get('lmsLogins', student.get('lms_logins', 0)) or 0)
+        lms_risk = max(0.0, (12.0 - lms) / 18.0)
+
+        facility = float(student.get('facilityAccess', student.get('facility_access', 0)) or 0)
+        facility_risk = max(0.0, (6.0 - facility) / 12.0)
+
+        library = float(student.get('library_visits', 0) or 0)
+        library_risk = max(0.0, (4.0 - library) / 8.0)
+
+        assignment = float(student.get('assignment_submissions', 0) or 0)
+        assignment_risk = max(0.0, (8.0 - assignment) / 12.0)
+
+        score = (
+            gpa_drop * 0.38 +
+            attendance_risk * 0.28 +
+            lms_risk * 0.16 +
+            facility_risk * 0.10 +
+            library_risk * 0.05 +
+            assignment_risk * 0.03
+        )
+        return float(min(max(score, 0.0), 1.0))
+
+    def risk_feature_contributions(self, student: Dict) -> List[Dict]:
+        """Return ranked feature contributions for a risk score."""
+        gpa = [float(v) for v in student.get('gpa', []) if v is not None]
+        current_gpa = gpa[-1] if gpa else 0.0
+        previous_gpa = gpa[-2] if len(gpa) > 1 else current_gpa
+        gpa_drop = max(0.0, previous_gpa - current_gpa) / 4.0
+
+        attendance = float(student.get('attendance', 0) or 0) / 100.0
+        attendance_risk = max(0.0, 0.75 - attendance) / 0.75
+
+        lms = float(student.get('lmsLogins', student.get('lms_logins', 0)) or 0)
+        lms_risk = max(0.0, (12.0 - lms) / 18.0)
+
+        facility = float(student.get('facilityAccess', student.get('facility_access', 0)) or 0)
+        facility_risk = max(0.0, (6.0 - facility) / 12.0)
+
+        library = float(student.get('library_visits', 0) or 0)
+        library_risk = max(0.0, (4.0 - library) / 8.0)
+
+        assignment = float(student.get('assignment_submissions', 0) or 0)
+        assignment_risk = max(0.0, (8.0 - assignment) / 12.0)
+
+        contributions = [
+            {
+                "feature": "GPA decline",
+                "value": round(gpa_drop * 100, 1),
+                "dir": 1 if gpa_drop > 0 else -1,
+                "weight": round(gpa_drop * 0.38, 4),
+            },
+            {
+                "feature": "Low attendance",
+                "value": round((1 - attendance) * 100, 1),
+                "dir": 1 if attendance < 0.75 else -1,
+                "weight": round(attendance_risk * 0.28, 4),
+            },
+            {
+                "feature": "Low LMS activity",
+                "value": round(lms, 1),
+                "dir": 1 if lms < 12 else -1,
+                "weight": round(lms_risk * 0.16, 4),
+            },
+            {
+                "feature": "Low facility access",
+                "value": round(facility, 1),
+                "dir": 1 if facility < 6 else -1,
+                "weight": round(facility_risk * 0.10, 4),
+            },
+            {
+                "feature": "Low library visits",
+                "value": round(library, 1),
+                "dir": 1 if library < 4 else -1,
+                "weight": round(library_risk * 0.05, 4),
+            },
+            {
+                "feature": "Low assignment submissions",
+                "value": round(assignment, 1),
+                "dir": 1 if assignment < 8 else -1,
+                "weight": round(assignment_risk * 0.03, 4),
+            },
+        ]
+        return sorted(contributions, key=lambda c: abs(c['weight']), reverse=True)
+
+    def _safe_int(self, value: Any, default: int = 0) -> int:
+        try:
+            if value is None or value == "":
+                return default
+            return int(value)
+        except (ValueError, TypeError):
+            return default
+
+    def _safe_float(self, value: Any, default: float = 0.0) -> float:
+        try:
+            if value is None or value == "":
+                return default
+            return float(value)
+        except (ValueError, TypeError):
+            return default
+
+    def manual_assessment(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Run a live risk assessment from manual student feature contributions."""
+        student = {
+            "name": payload.get("name", "Unknown"),
+            "programme": payload.get("programme", ""),
+            "year": self._safe_int(payload.get("year", 1), 1),
+            "gpa": [v for v in [payload.get("gpa_sem1"), payload.get("gpa_sem2"), payload.get("gpa_sem3")] if isinstance(v, (int, float))],
+            "attendance": self._safe_float(payload.get("attendance", 0), 0.0),
+            "lmsLogins": self._safe_int(payload.get("lms_logins", payload.get("lmsLogins", 0)), 0),
+            "facilityAccess": self._safe_int(payload.get("facility_access", payload.get("facilityAccess", 0)), 0),
+            "library_visits": self._safe_float(payload.get("library_visits", 0), 0.0),
+            "after_hours_wifi": self._safe_float(payload.get("after_hours_wifi", 0), 0.0),
+            "assignment_submissions": self._safe_int(payload.get("assignment_submissions", 0), 0),
+        }
+        risk = self.calculate_risk_score(student)
+        tier = 'high' if risk >= 0.7 else 'medium' if risk >= 0.4 else 'low'
+        contributions = self.risk_feature_contributions(student)
+        explanation = (
+            f"{student['name']} is estimated at {round(risk*100)}% risk ({tier}) based on the top contributing factors: "
+            + ", ".join([c['feature'] for c in contributions[:5]]) + "."
+        )
+        return {
+            "name": student["name"],
+            "programme": student["programme"],
+            "year": student["year"],
+            "risk": risk,
+            "tier": tier,
+            "feature_contributions": contributions,
+            "explanation": explanation,
+            "lastUpdated": datetime.now().strftime("%Y-%m-%d"),
+        }
+
     def predict_all_students(self, students: List[Dict]) -> List[Dict]:
         """
         Run predictions for all students using ML pipeline

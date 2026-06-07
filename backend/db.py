@@ -30,7 +30,11 @@ def _build_mem():
 _build_mem()
 
 _USE_MYSQL = False
+_USE_SQLITE = False
 _engine    = None
+
+SQLITE_PATH = os.getenv("SQLITE_PATH", os.path.join(os.path.dirname(__file__), "..", "data", "user_auth.db"))
+
 
 def _try_mysql():
     global _USE_MYSQL, _engine
@@ -47,18 +51,38 @@ def _try_mysql():
         _engine = eng
         _USE_MYSQL = True
         print("db.py: Connected to MySQL")
+        return True
     except Exception as e:
-        print(f"db.py: MySQL unavailable ({e}) — using in-memory store")
+        print(f"db.py: MySQL unavailable ({e})")
         _USE_MYSQL = False
+        return False
+
+
+def _try_sqlite():
+    global _USE_SQLITE, _engine
+    try:
+        from sqlalchemy import create_engine
+        sqlite_dir = os.path.dirname(SQLITE_PATH)
+        if not os.path.exists(sqlite_dir):
+            os.makedirs(sqlite_dir, exist_ok=True)
+        eng = create_engine(f"sqlite:///{SQLITE_PATH}", echo=False, connect_args={"check_same_thread": False})
+        _engine = eng
+        _USE_SQLITE = True
+        print(f"db.py: Connected to SQLite at {SQLITE_PATH}")
+        return True
+    except Exception as e:
+        print(f"db.py: SQLite fallback unavailable ({e})")
+        _USE_SQLITE = False
+        return False
 
 def _ensure_table():
-    if not _USE_MYSQL or _engine is None:
+    if _engine is None:
         return
     from sqlalchemy import text
     with _engine.begin() as c:
         c.execute(text("""
             CREATE TABLE IF NOT EXISTS system_users (
-                id         INT AUTO_INCREMENT PRIMARY KEY,
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 username   VARCHAR(80)  NOT NULL UNIQUE,
                 password   VARCHAR(255) NOT NULL,
                 name       VARCHAR(120) NOT NULL,
@@ -80,7 +104,11 @@ def _ensure_table():
             print("db.py: Seeded default users into MySQL")
 
 def init_db():
-    _try_mysql()
+    if not _try_mysql():
+        if _try_sqlite():
+            print("db.py: Falling back to SQLite persistence")
+        else:
+            print("db.py: No database backend available; using in-memory auth store only")
     _ensure_table()
 
 def verify_password(plain: str, hashed: str) -> bool:
@@ -90,7 +118,7 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 def get_user(username):
-    if _USE_MYSQL and _engine:
+    if _engine:
         try:
             from sqlalchemy import text
             with _engine.connect() as c:
@@ -104,7 +132,7 @@ def get_user(username):
     return _MEM.get(username)
 
 def get_all_users():
-    if _USE_MYSQL and _engine:
+    if _engine:
         try:
             from sqlalchemy import text
             with _engine.connect() as c:
@@ -120,7 +148,7 @@ def get_all_users():
 
 def create_user(username, password, name, role, role_label):
     hashed = _hash(password)
-    if _USE_MYSQL and _engine:
+    if _engine:
         try:
             from sqlalchemy import text
             with _engine.begin() as c:
@@ -140,7 +168,7 @@ def create_user(username, password, name, role, role_label):
 
 def touch_last_login(username):
     now = datetime.utcnow()
-    if _USE_MYSQL and _engine:
+    if _engine:
         try:
             from sqlalchemy import text
             with _engine.begin() as c:

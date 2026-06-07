@@ -15,22 +15,23 @@ echo "Starting MindGuard-XAI backend on http://localhost:8000"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="$REPO_ROOT:$PYTHONPATH"
 
-APP_IMPORT_TARGET="backend.server:app"
-HOST="0.0.0.0"
-PORT="8000"
-
-# Ensure uvicorn is always launched in a way that preserves package context.
-# From within backend/: importing `backend.server:app` requires PYTHONPATH=repo root.
-if [ -f "venv/bin/uvicorn" ]; then
-  exec ./venv/bin/uvicorn "$APP_IMPORT_TARGET" --reload --host "$HOST" --port "$PORT"
-else
-  # Fallback: run uvicorn as a module using the venv python
-  exec venv/bin/python -m uvicorn "$APP_IMPORT_TARGET" --reload --host "$HOST" --port "$PORT"
+# Load environment variables from .env if it exists
+if [ -f ".env" ]; then
+    echo "Loading environment variables from .env"
+    export $(grep -v '^#' .env | xargs)
 fi
 
+# Configuration with environment fallbacks
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-8000}"
+RELOAD="${RELOAD:-true}"
+APP_IMPORT_TARGET="backend.server:app"
 
+UVICORN_CMD="./venv/bin/python -m uvicorn"
 
-
-
-
-
+echo "Starting server on $HOST:$PORT (reload=$RELOAD)..."
+if [ "$RELOAD" = "true" ]; then
+    exec $UVICORN_CMD "$APP_IMPORT_TARGET" --reload --host "$HOST" --port "$PORT"
+else
+    exec $UVICORN_CMD "$APP_IMPORT_TARGET" --host "$HOST" --port "$PORT"
+fi
