@@ -481,8 +481,23 @@ class MLPipeline:
         df = self.engineer_features(df)
         X = self.prepare_features(df)
         
-        # Get continuous risk predictions
-        risk_scores = np.clip(self.model.predict(X), 0, 1)
+        # Get continuous risk predictions using probabilities where available
+        try:
+            probabilities = self.model.predict_proba(X)
+            smoothed_proba = np.array(probabilities, dtype=float)
+            for i in range(len(smoothed_proba)):
+                max_val = np.max(smoothed_proba[i])
+                if max_val > 0.95:
+                    max_idx = int(np.argmax(smoothed_proba[i]))
+                    smoothed_proba[i][max_idx] = max_val * 0.95
+                    other_sum = 1.0 - smoothed_proba[i][max_idx]
+                    for j in range(len(smoothed_proba[i])):
+                        if j != max_idx:
+                            smoothed_proba[i][j] = other_sum / (len(smoothed_proba[i]) - 1)
+            risk_scores = smoothed_proba[:, 2] + 0.5 * smoothed_proba[:, 1]
+            risk_scores = np.clip(risk_scores, 0, 1)
+        except Exception:
+            risk_scores = np.clip(self.model.predict(X), 0, 1)
         
         results = df[['student_id']].copy()
         if 'name' in df.columns:
@@ -490,7 +505,7 @@ class MLPipeline:
         results['risk'] = risk_scores
         results['risk_percent'] = np.round(risk_scores * 100.0, 1)
         results['tier'] = results['risk'].apply(
-            lambda x: 'high' if x >= 0.75 else 'medium' if x >= 0.5 else 'low'
+            lambda x: 'high' if x >= 0.70 else 'medium' if x >= 0.40 else 'low'
         )
         
         return results
@@ -500,24 +515,65 @@ class MLPipeline:
         if self.model is None:
             self.load_model()
 
-        X = pd.DataFrame([features])
-        risk_score = float(self.model.predict(X)[0])
-        risk_score = max(0.0, min(1.0, risk_score))
+        # Convert input dict to DataFrame and run through feature engineering
+        df = pd.DataFrame([features])
+        try:
+            df_eng = self.engineer_features(df.copy())
+            X = self.prepare_features(df_eng)
+        except Exception:
+            # Fallback: try to select numeric columns only
+            X = df.select_dtypes(include=[float, int, 'number']).fillna(0)
+
+        try:
+            probabilities = self.model.predict_proba(X)[0]
+            smoothed_proba = np.array(probabilities, dtype=float)
+            max_val = np.max(smoothed_proba)
+            if max_val > 0.95:
+                max_idx = int(np.argmax(smoothed_proba))
+                smoothed_proba[max_idx] = max_val * 0.95
+                other_sum = 1.0 - smoothed_proba[max_idx]
+                for j in range(len(smoothed_proba)):
+                    if j != max_idx:
+                        smoothed_proba[j] = other_sum / (len(smoothed_proba) - 1)
+            risk_score = float(smoothed_proba[2] + 0.5 * smoothed_proba[1])
+            risk_score = float(np.clip(risk_score, 0, 1))
+        except Exception:
+            risk_score = float(self.model.predict(X)[0])
+            risk_score = max(0.0, min(1.0, risk_score))
 
         # Progressive Tier Mapping
-        if risk_score >= 0.75:
+        if risk_score >= 0.70:
             tier = "high"
-        elif risk_score >= 0.50:
+        elif risk_score >= 0.40:
             tier = "medium"
         else:
             tier = "low"
+
+        # Generate SHAP explanations using the engineered feature matrix where possible
+        try:
+            shap_vals = self.generate_shap_explanation(X, features) if hasattr(self, 'generate_shap_explanation') else []
+        except Exception as e:
+            print(f"[predict_single] SHAP generation error: {e}")
+            shap_vals = []
+
+        # Generate intervention recommendations and richer explanation text where possible
+        try:
+            intervention = self.generate_intervention(tier, shap_vals) if hasattr(self, 'generate_intervention') else []
+        except Exception:
+            intervention = []
+
+        try:
+            explanation_text = self.generate_explanation_text(features, shap_vals, tier) if hasattr(self, 'generate_explanation_text') else f"Predicted mental health risk: {risk_score*100:.1f}%"
+        except Exception:
+            explanation_text = f"Predicted mental health risk: {risk_score*100:.1f}%"
 
         return {
             "risk": round(risk_score, 4),
             "risk_percent": round(risk_score * 100, 1),
             "tier": tier,
-            "shap": self.generate_shap_explanation(X) if hasattr(self, 'generate_shap_explanation') else [],
-            "explanation": f"Predicted mental health risk: {risk_score*100:.1f}%",
+            "shap": shap_vals,
+            "explanation": explanation_text,
+            "intervention": intervention,
             "lastUpdated": datetime.now().isoformat()
         }
 

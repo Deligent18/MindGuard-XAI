@@ -106,6 +106,21 @@ class DataService:
                 + ", ".join([c['feature'] for c in self.risk_feature_contributions(student)[:3]])
                 + "."
             )
+            # Populate lightweight SHAP-like contributions from rule-based contributors
+            try:
+                contribs = self.risk_feature_contributions(student)
+                student["shap"] = [
+                    {
+                        "feature": c.get("feature"),
+                        "value": c.get("weight", 0.0),
+                        "dir": c.get("dir", 1),
+                        "contribution_percent": round(abs(c.get("weight", 0.0)) * 100, 1),
+                        "feature_value": c.get("value")
+                    }
+                    for c in contribs[:6]
+                ]
+            except Exception:
+                student["shap"] = []
             student["intervention"] = (
                 ["Immediate counsellor contact within 24 hours", "Safety planning assessment", "Academic load review"]
                 if tier == 'high' else

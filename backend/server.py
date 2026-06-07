@@ -76,7 +76,24 @@ def _load_csv_students_fast():
         # convert_csv_to_student_format already sets tier/risk/shap.
         # Override explanation/intervention to show background-computing message.
         for s in students:
+            # Provide an informative placeholder explanation and lightweight feature contributions
             s["explanation"]  = "ML predictions are being computed in the background."
+            # Create a simple SHAP-like contribution list from rule-based feature importance
+            try:
+                contribs = data_service.risk_feature_contributions(s)
+                # Map to SHAP-like structure expected by frontend
+                s["shap"] = [
+                    {
+                        "feature": c.get("feature"),
+                        "value": c.get("weight", 0.0),
+                        "dir": c.get("dir", 1),
+                        "contribution_percent": round(abs(c.get("weight", 0.0)) * 100, 1),
+                        "feature_value": c.get("value")
+                    }
+                    for c in contribs[:6]
+                ]
+            except Exception:
+                s["shap"] = []
             s["intervention"] = ["Please check back in a few minutes for full recommendations."]
             s["lastUpdated"]  = "computing…"
         print(f"[startup] Loaded {len(students)} students from CSV (fast path)")
@@ -152,8 +169,31 @@ def _run_ml_predictions_background():
 
         df_eng = pipeline.engineer_features(df_full.copy())
         X      = pipeline.prepare_features(df_eng)
-        preds  = pipeline.model.predict(X)
-        probs  = pipeline.model.predict_proba(X)
+        preds = pipeline.model.predict(X)
+        # Some fitted models (e.g. XGBRegressor) do not implement `predict_proba`.
+        # Handle both classifier (with predict_proba) and regressor outputs gracefully.
+        try:
+            probs = pipeline.model.predict_proba(X)
+        except Exception:
+            # Fallback: if preds are floats in [0,1], treat them as risk scores
+            # and synthesize a 3-class probability vector (low, medium, high).
+            preds_arr = np.asarray(preds)
+            if np.issubdtype(preds_arr.dtype, np.floating):
+                # Ensure values are in [0,1]
+                risk_scores_fallback = np.clip(preds_arr.astype(float), 0.0, 1.0)
+                probs = np.zeros((len(risk_scores_fallback), 3), dtype=float)
+                # Heuristic mapping: high class probability ~ risk, medium ~ mid-range, low ~ complement
+                probs[:, 2] = risk_scores_fallback
+                probs[:, 1] = np.clip((risk_scores_fallback - 0.35) * 1.6, 0.0, 1.0) * (1.0 - probs[:, 2])
+                probs[:, 0] = 1.0 - probs[:, 1] - probs[:, 2]
+            else:
+                # preds are likely integer class labels — synthesize one-hot probabilities
+                probs = np.zeros((len(preds), 3), dtype=float)
+                for idx, p in enumerate(preds):
+                    try:
+                        probs[idx, int(p)] = 1.0
+                    except Exception:
+                        probs[idx, 0] = 1.0
 
         risk_map = {0: 'low', 1: 'medium', 2: 'high'}
 
@@ -197,8 +237,20 @@ def _run_ml_predictions_background():
         for i, student in enumerate(students):
             if i >= len(preds):
                 break
-            tier  = risk_map.get(int(preds[i]), 'low')
-            risk  = float(risk_scores[i])
+            # If model produced continuous predictions (regressor), map to nearest
+            # training label centers to reproduce original label distribution.
+            try:
+                val = float(preds[i])
+                # centers correspond to training label mapping used in train_model
+                centers = np.array([0.25, 0.62, 0.88])
+                idx = int(np.argmin(np.abs(centers - val)))
+                tier = {0: 'low', 1: 'medium', 2: 'high'}.get(idx, 'low')
+            except Exception:
+                try:
+                    tier = risk_map.get(int(preds[i]), 'low')
+                except Exception:
+                    tier = 'low'
+            risk = float(risk_scores[i])
             s = dict(student)
             s['risk']        = risk
             s['tier']        = tier
@@ -806,6 +858,7 @@ async def get_student(student_id: str, current_user: dict = Depends(get_current_
         if shap_missing or explanation_missing:
             if ML_PIPELINE_AVAILABLE:
                 try:
+                    print(f"[on-demand] Computing ML prediction for student {student.get('id')}")
                     # Compute full per-student prediction including SHAP + text.
                     prediction = data_service.predict_single_student(student)
                     student["risk"] = prediction.get("risk", student.get("risk"))
@@ -822,6 +875,9 @@ async def get_student(student_id: str, current_user: dict = Depends(get_current_
                         "data": filter_student_by_role(student, role)
                     })
                 except Exception as e:
+                    import traceback as _tb
+                    print(f"[on-demand] Prediction error for {student.get('id')}: {e}")
+                    _tb.print_exc()
                     # Keep response stable; do not fail the request.
                     student["explanation"] = student.get("explanation") or "SHAP explanation pending due to computation error."
 
