@@ -69,9 +69,16 @@ def _load_csv_students_fast():
     No ML inference — returns immediately so the server can respond.
     """
     try:
+        csv_data = None
+
+        # Try to load from CSV via the shared data_service.
+        # If CSV loading falls back to a tiny sample dataset, pagination will
+        # incorrectly report pages=1. Make failures explicit here.
         csv_data = data_service.load_students_from_csv()
         if not csv_data:
+            print("[startup] CSV load returned 0 records (possible fallback/sample or load error).")
             return []
+
         students = data_service.convert_csv_to_student_format(csv_data)
         # convert_csv_to_student_format already sets tier/risk/shap.
         # Override explanation/intervention to show background-computing message.
@@ -708,29 +715,20 @@ async def get_analytics(current_user: dict = Depends(get_current_user)):
                 "topStudents": [],
             }
 
-        FACULTY_MAP = {
-            "BSc": "Science",
-            "BEng": "Engineering",
-            "BCom": "Commerce",
-            "BA": "Arts",
-        }
-
         def faculty_name(programme: str) -> str:
             if not programme:
                 return "Unknown"
-            programme = programme.strip()
-            for prefix, faculty in FACULTY_MAP.items():
-                if programme.startswith(prefix):
-                    return faculty
-            return programme.split()[0] if programme else "Unknown"
+            p = programme.strip()
+            if "Engineering" in p:
+                return "Engineering"
+            if "Business" in p:
+                return "Commerce"
+            if "Health" in p or "Nursing" in p or "Medicine" in p:
+                return "Health Sci"
+            return "Applied Sci"
 
         def department_name(programme: str) -> str:
-            if not programme:
-                return "Unknown"
-            parts = programme.split()
-            if len(parts) <= 1:
-                return programme
-            return " ".join(parts[1:]).strip()
+            return programme.strip() if programme else "Unknown"
 
         def summarize(items, total_base=None):
             total = len(items)

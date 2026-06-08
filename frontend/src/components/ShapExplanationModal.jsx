@@ -2,14 +2,14 @@ import React from 'react';
 
 const ShapExplanationModal = ({ student, onClose }) => {
   const riskPercent = student.risk_percent ?? (student.risk * 100) ?? 0;
-  const tier = student.tier || (riskPercent >= 75 ? 'high' : riskPercent >= 50 ? 'medium' : 'low');
+  const tier = student.tier || (riskPercent >= 70 ? 'high' : riskPercent >= 40 ? 'medium' : 'low');
 
   const generateSimpleExplanation = () => {
     let text = `This student currently has a ${riskPercent.toFixed(1)}% risk of mental health challenges. `;
 
-    if (tier === 'high') text += "This is a high risk level that needs immediate attention. ";
-    else if (tier === 'medium') text += "This is a medium risk level that should be monitored closely. ";
-    else text += "This is currently a low risk level. ";
+    if (tier === 'high') text += "This is a high risk level (≥ 70%) that needs immediate attention. ";
+    else if (tier === 'medium') text += "This is a medium risk level (40 - 69.9%) that should be monitored closely. ";
+    else text += "This is currently a low risk level (< 40%). ";
 
     text += "The main contributing factors include academic performance, sleep patterns, and attendance. ";
     text += "We strongly recommend scheduling a counselling session to provide early support and prevent the risk from increasing.";

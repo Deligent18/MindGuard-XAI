@@ -182,9 +182,9 @@ export async function assessStudent(assessmentData) {
 
 export const getRiskLevel = (riskPercent) => {
   const percent = parseFloat(riskPercent) || 0;
-  if (percent >= 75) return { level: 'high', color: '#ef4444', bgColor: 'bg-red-500/10', label: 'HIGH RISK' };
-  if (percent >= 50) return { level: 'medium', color: '#eab308', bgColor: 'bg-yellow-500/10', label: 'MEDIUM RISK' };
-  return { level: 'low', color: '#22c55e', bgColor: 'bg-green-500/10', label: 'LOW RISK' };
+  if (percent >= 70) return { level: 'high', color: '#ef4444', bgColor: 'bg-red-500/10', label: 'HIGH RISK', threshold: '≥ 70%' };
+  if (percent >= 40) return { level: 'medium', color: '#eab308', bgColor: 'bg-yellow-500/10', label: 'MEDIUM RISK', threshold: '40 - 69.9%' };
+  return { level: 'low', color: '#22c55e', bgColor: 'bg-green-500/10', label: 'LOW RISK', threshold: '< 40%' };
 };
 
 export const formatRisk = (riskPercent) => (parseFloat(riskPercent) || 0).toFixed(1) + '%';

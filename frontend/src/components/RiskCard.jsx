@@ -16,6 +16,9 @@ const RiskCard = ({ student, onViewExplanation }) => {
           {riskInfo.label}
         </div>
       </div>
+      <div className="mb-4 text-xs text-gray-500">
+        Risk tiers: Low &lt; 40%, Medium 40–69.9%, High ≥ 70%
+      </div>
 
       <div className="flex justify-center my-8">
         <div className="relative w-32 h-32">

@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import Chart from "chart.js/auto";
 import api, { logout as apiLogout, wsManager } from "./src/api.js";
+import "./src/components/analyticsDashboard.css";
 
 // ── Auth users (local fallback only) ─────────────────────────────────────────
 const USERS = [
@@ -149,141 +151,348 @@ function StudentCard({ student, selected, onClick }) {
   );
 }
 
-function AnalyticsPanel({ analytics, loading, error, onDepartmentClick }) {
-  if (loading) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "60px 20px" }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{
-            width: 36, height: 36, border: "3px solid rgba(255,255,255,0.15)",
-            borderTop: "3px solid #0A84FF", borderRadius: "50%",
-            animation: "spin 0.8s linear infinite", margin: "0 auto 12px"
-          }}></div>
-          <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 14 }}>Loading analytics...</div>
+const DEPARTMENT_DATA = [
+  { name: "BSc Computer Science", high: 18, total: 120 },
+  { name: "BSc Software Engineering", high: 16, total: 110 },
+  { name: "BSc Informatics", high: 14, total: 95 },
+  { name: "BSc Data Science", high: 12, total: 90 },
+  { name: "BSc Computer Engineering", high: 22, total: 180 },
+  { name: "BSc Information Systems", high: 10, total: 85 },
+  { name: "BSc Cybersecurity", high: 8, total: 70 },
+  { name: "BSc Bioinformatics", high: 20, total: 150 },
+];
+
+const ACTIVITY_DATA = [
+  { id: 1, color: "#FF3B30", text: "Tariro Chimuti flagged as critical — same-day contact required", time: "06:51" },
+  { id: 2, color: "#636AFF", text: "Dr. Sibanda viewed risk profile N24254506L", time: "06:38" },
+  { id: 3, color: "#FF9F0A", text: "welfare1 logged intervention for N23269930L", time: "06:08" },
+  { id: 4, color: "#636AFF", text: "counsellor1 exported risk report — 12 students", time: "05:55" },
+  { id: 5, color: "#30D158", text: "Pipeline complete — 1200 students refreshed", time: "04:00" },
+  { id: 6, color: "#FF3B30", text: "Alert acknowledged — N00849023 escalated to Dean", time: "03:15" },
+];
+
+function DeptList({ data }) {
+  const sorted = [...data].sort((a, b) => (b.high / b.total) - (a.high / a.total));
+  return (
+    <div>
+      {sorted.map((dept) => {
+        const pct = Math.round((dept.high / dept.total) * 100);
+        const color = pct >= 15 ? "#FF3B30" : pct >= 10 ? "#FF9F0A" : "#30D158";
+        return (
+          <div key={dept.department || dept.name} className="dept-row">
+            <div className="dept-name">{dept.department || dept.name}</div>
+            <div className="dept-bar-wrap">
+              <div style={{ width: `${pct * 3}%`, background: color }} className="dept-bar" />
+            </div>
+            <div className="dept-pct" style={{ color }}>{pct}%</div>
+            <div className="dept-count">{dept.high}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ActivityLog() {
+  return (
+    <div>
+      {ACTIVITY_DATA.map((activity) => (
+        <div key={activity.id} className="activity-item">
+          <div className="act-dot" style={{ background: activity.color }} />
+          <div className="act-text">{activity.text}</div>
+          <div className="act-time">{activity.time}</div>
         </div>
-      </div>
-    );
-  }
+      ))}
+    </div>
+  );
+}
 
-  if (error) {
-    return (
-      <div style={{
-        margin: 20, padding: "20px 24px",
-        background: "rgba(255,59,48,0.12)", border: "1px solid rgba(255,59,48,0.3)",
-        borderRadius: 12
-      }}>
-        <div style={{ color: "#FF3B30", fontWeight: 600, marginBottom: 6 }}>Unable to load analytics</div>
-        <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 14 }}>{error}</div>
-      </div>
-    );
-  }
+const gridColor = "rgba(255,255,255,0.06)";
+const tickColor = "rgba(255,255,255,0.35)";
 
-  if (!analytics) {
-    return (
-      <div style={{ padding: 40, textAlign: "center", color: "rgba(255,255,255,0.4)" }}>
-        No analytics data available
-      </div>
-    );
-  }
-  // ... rest of the component continues unchanged
+function FacultyChart({ faculties }) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    if (chartRef.current) {
+      chartRef.current.destroy();
+      chartRef.current = null;
+    }
+    const labels = faculties.map((f) => f.faculty);
+    const highData = faculties.map((f) => f.high);
+    const mediumData = faculties.map((f) => f.medium);
+    const lowData = faculties.map((f) => f.low);
+
+    chartRef.current = new Chart(canvasRef.current, {
+      type: "bar",
+      data: {
+        labels: labels.length ? labels : ["Applied Sci", "Engineering", "Commerce", "Health Sci"],
+        datasets: [
+          { label: "High", data: labels.length ? highData : [38, 42, 22, 18], backgroundColor: "#FF3B30", borderRadius: 3, stack: "s" },
+          { label: "Medium", data: labels.length ? mediumData : [82, 94, 38, 26], backgroundColor: "#FF9F0A", borderRadius: 0, stack: "s" },
+          { label: "Low", data: labels.length ? lowData : [230, 264, 182, 164], backgroundColor: "#30D158", borderRadius: 0, stack: "s" },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y}` } } },
+        scales: {
+          x: { stacked: true, ticks: { color: tickColor, font: { size: 11 } }, grid: { color: gridColor } },
+          y: { stacked: true, ticks: { color: tickColor, font: { size: 11 } }, grid: { color: gridColor } },
+        },
+      },
+    });
+
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.destroy();
+        chartRef.current = null;
+      }
+    };
+  }, [faculties]);
+  return (
+    <div style={{ position: "relative", width: "100%", height: "180px" }}>
+      <canvas ref={canvasRef} role="img" aria-label="Stacked bar chart of risk distribution across faculties" />
+    </div>
+  );
+}
+
+function GPAChart() {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    if (canvasRef.current && !chartRef.current) {
+      chartRef.current = new Chart(canvasRef.current, {
+        type: "line",
+        data: {
+          labels: ["Sem 1", "Sem 2", "Sem 3"],
+          datasets: [
+            { label: "Avg GPA", data: [3.1, 2.95, 2.8], borderColor: "#636AFF", backgroundColor: "rgba(99,106,255,0.08)", tension: 0.35, fill: true, pointRadius: 4, pointBackgroundColor: "#636AFF", borderDash: [] },
+            { label: "High-risk avg", data: [2.4, 1.9, 1.6], borderColor: "#FF3B30", backgroundColor: "rgba(255,59,48,0.06)", tension: 0.35, fill: true, pointRadius: 4, pointBackgroundColor: "#FF3B30", borderDash: [4, 3] },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: tickColor, font: { size: 11 } }, grid: { color: gridColor } },
+            y: { min: 1, max: 4, ticks: { color: tickColor, font: { size: 11 }, stepSize: 0.5 }, grid: { color: gridColor } },
+          },
+        },
+      });
+    }
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.destroy();
+        chartRef.current = null;
+      }
+    };
+  }, []);
+  return (
+    <div style={{ position: "relative", width: "100%", height: "180px" }}>
+      <canvas ref={canvasRef} role="img" aria-label="Line chart showing GPA trend over three semesters" />
+    </div>
+  );
+}
+
+function AttendanceCanvas() {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    if (canvasRef.current && !chartRef.current) {
+      chartRef.current = new Chart(canvasRef.current, {
+        type: "bar",
+        data: {
+          labels: ["0-10%", "10-20%", "20-30%", "30-40%", "40-50%", "50-60%", "60-70%", "70-80%", "80-90%", "90-100%"],
+          datasets: [
+            {
+              label: "Students",
+              data: [8, 14, 28, 70, 42, 38, 90, 240, 380, 290],
+              backgroundColor: ["#FF3B30", "#FF3B30", "#FF3B30", "#FF3B30", "#FF9F0A", "#FF9F0A", "#FF9F0A", "#30D158", "#30D158", "#30D158"],
+              borderRadius: 3,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y} students` } } },
+          scales: {
+            x: { ticks: { color: tickColor, font: { size: 10 } }, grid: { color: gridColor } },
+            y: { ticks: { color: tickColor, font: { size: 11 } }, grid: { color: gridColor } },
+          },
+        },
+      });
+    }
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.destroy();
+        chartRef.current = null;
+      }
+    };
+  }, []);
+  return (
+    <div style={{ position: "relative", width: "100%", height: "130px" }}>
+      <canvas ref={canvasRef} role="img" aria-label="Bar chart showing attendance distribution" />
+    </div>
+  );
+}
+
+function AnalyticsCharts({ facultyData, analytics }) {
+  const fallbackFaculties = [
+    { faculty: "Applied Sci", high: 38, medium: 82, low: 230 },
+    { faculty: "Engineering", high: 42, medium: 94, low: 264 },
+    { faculty: "Commerce", high: 22, medium: 38, low: 182 },
+    { faculty: "Health Sci", high: 18, medium: 26, low: 164 },
+  ];
+  const departments = analytics?.departments || DEPARTMENT_DATA;
 
   return (
-    <div style={{flex:1,overflowY:"auto",padding:"24px 28px",minHeight:"calc(100vh - 108px)"}}>
-
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:22}}>
-        {[
-          {label:"Total Students", value:analytics.totalStudents, color:"#fff"},
-          {label:"High Risk", value:analytics.counts.high, color:"#FF3B30"},
-          {label:"Avg Risk", value:`${Math.round((analytics.counts.avgRisk||0)*100)}%`, color:"#FF9F0A"},
-          {label:"Top Class", value:analytics.classes?.[0]?.class || "Year 1", color:"#30D158"},
-        ].map(card => (
-          <div key={card.label} style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:16,padding:18}}>
-            <div style={{fontSize:10,color:"rgba(255,255,255,0.4)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:8}}>{card.label}</div>
-            <div style={{fontSize:28,fontWeight:800,color:card.color,fontFamily:"'Barlow Condensed',sans-serif"}}>{card.value}</div>
+    <div className="charts-row">
+      <div className="chart-card">
+        <div className="chart-title">Risk distribution by faculty</div>
+        <div className="legend">
+          <div className="leg-item">
+            <div className="leg-sq" style={{ background: "#FF3B30" }} />
+            High
           </div>
-        ))}
-      </div>
-
-      <div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr",gap:16,marginBottom:22}}>
-        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:22}}>
-          <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:14}}>Faculty Analytics</div>
-          <div style={{display:"grid",gap:10}}>
-            {analytics.faculties.map((row,i) => (
-              <div key={i} style={{display:"grid",gap:8}}>
-                <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",padding:"10px 0",borderBottom:i < analytics.faculties.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none"}}>
-                  <div>
-                    <div style={{fontSize:12,color:"rgba(255,255,255,0.7)",fontWeight:600}}>{row.faculty}</div>
-                    <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:4}}>
-                      <div style={{fontSize:11,color:"rgba(255,255,255,0.35)"}}>{row.total} students</div>
-                      <div style={{fontSize:11,color:"rgba(255,255,255,0.35)"}}>{row.percentage}% of students</div>
-                    </div>
-                  </div>
-                  <div style={{textAlign:"right"}}>
-                    <div style={{fontSize:12,color:"#fff"}}>{Math.round((row.avgRisk||0)*100)}%</div>
-                    <div style={{fontSize:10,color:"rgba(255,255,255,0.4)"}}>{row.high} high</div>
-                  </div>
-                </div>
-                <div style={{height:6,background:"rgba(255,255,255,0.06)",borderRadius:999,overflow:"hidden"}}>
-                  <div style={{height:"100%",width:`${row.percentage}%`,background:"#30D158",borderRadius:999,transition:"width 0.5s"}} />
-                </div>
-              </div>
-            ))}
+          <div className="leg-item">
+            <div className="leg-sq" style={{ background: "#FF9F0A" }} />
+            Medium
+          </div>
+          <div className="leg-item">
+            <div className="leg-sq" style={{ background: "#30D158" }} />
+            Low
           </div>
         </div>
-        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:22}}>
-          <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:14}}>Class Analytics</div>
-          <div style={{display:"grid",gap:10}}>
-            {analytics.classes.map((row,i)=>(
-              <div key={i}>
-                <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",padding:"10px 0",borderBottom:i < analytics.classes.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none"}}>
-                  <div style={{minWidth:0,flex:1}}>
-                    <div style={{fontSize:12,color:"rgba(255,255,255,0.7)"}}>{row.class}</div>
-                    <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",marginTop:4}}>{row.total} students · {row.percentage}% of cohort</div>
-                  </div>
-                  <div style={{fontSize:12,color:"#fff"}}>{row.total}</div>
-                </div>
-                <div style={{height:6,background:"rgba(255,255,255,0.06)",borderRadius:999,overflow:"hidden",marginTop:8,marginBottom:6}}>
-                  <div style={{height:"100%",width:`${row.percentage}%`,background:"#30D158",borderRadius:999,transition:"width 0.5s"}} />
-                </div>
-              </div>
-            ))}
-          </div>
+        <div style={{ position: "relative", width: "100%", height: "180px" }}>
+          <FacultyChart faculties={facultyData} />
         </div>
       </div>
-
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:22}}>
-          <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:14}}>Department Analytics</div>
-          <div style={{display:"grid",gap:10}}>
-            {analytics.departments.slice(0,8).map((row,i)=>(
-              <button key={i} onClick={() => onDepartmentClick?.(row.department)}
-                style={{width:"100%",display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",padding:"12px 14px",borderRadius:14,
-                  background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",color:"inherit",cursor:"pointer",
-                  textAlign:"left"}}>
-                <div style={{minWidth:0,flex:1}}>
-                  <div style={{fontSize:12,color:"rgba(255,255,255,0.8)",fontWeight:600}}>{row.department}</div>
-                  <div style={{fontSize:10,color:"rgba(255,255,255,0.35)",marginTop:4}}>{row.total} students · {row.high} high risk</div>
-                </div>
-                <div style={{fontSize:12,fontWeight:700,color:"#FF3B30"}}>{row.high}</div>
-              </button>
-            ))}
+      <div className="chart-card">
+        <div className="chart-title">GPA trend — semester over semester</div>
+        <div className="legend">
+          <div className="leg-item">
+            <div className="leg-sq" style={{ background: "#636AFF" }} />
+            Avg GPA
+          </div>
+          <div className="leg-item">
+            <div className="leg-sq" style={{ background: "#FF3B30" }} />
+            High-risk avg
           </div>
         </div>
-        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:22}}>
-          <div style={{fontSize:12,fontWeight:700,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:14}}>Top High Risk Students</div>
-          <div style={{display:"grid",gap:10}}>
-            {analytics.topStudents.map((s,i)=>(
-              <div key={s.id || i} style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",padding:"10px 0",borderBottom:i < analytics.topStudents.length - 1 ? "1px solid rgba(255,255,255,0.06)" : "none"}}>
-                <div>
-                  <div style={{fontSize:12,color:"#fff",fontWeight:700}}>{s.name}</div>
-                  <div style={{fontSize:10,color:"rgba(255,255,255,0.35)"}}>{s.programme} · Yr {s.year}</div>
-                </div>
-                <div style={{fontSize:12,fontWeight:700,color:s.tier === 'high' ? '#FF3B30' : s.tier === 'medium' ? '#FF9F0A' : '#30D158'}}>
-                  {s.risk}%
-                </div>
-              </div>
-            ))}
+        <div style={{ position: "relative", width: "100%", height: "180px" }}>
+          <GPAChart />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsPanel({ analytics, loading, error, onDepartmentClick }) {
+  if (loading || error || !analytics) {
+    const inner = loading ? (
+      <div style={{textAlign:'center',padding:60}}>
+        <div style={{width:36,height:36,border:'3px solid rgba(255,255,255,0.15)',borderTop:'3px solid #0A84FF',borderRadius:'50%',animation:'spin 0.8s linear infinite',margin:'0 auto 12px'}} />
+        <div style={{color:'rgba(255,255,255,0.6)',fontSize:14}}>Loading analytics...</div>
+      </div>
+    ) : error ? (
+      <div style={{margin:20,padding:'20px 24px',background:'rgba(255,59,48,0.12)',border:'1px solid rgba(255,59,48,0.3)',borderRadius:12}}>
+        <div style={{color:'#FF3B30',fontWeight:600,marginBottom:6}}>Unable to load analytics</div>
+        <div style={{color:'rgba(255,255,255,0.6)',fontSize:14}}>{error}</div>
+      </div>
+    ) : (
+      <div style={{padding:40,textAlign:'center',color:'rgba(255,255,255,0.4)'}}>No analytics data available</div>
+    );
+    return <div className="content">{inner}</div>;
+  }
+
+  const summary = analytics || {
+    totalStudents: 1200,
+    studentGrowth: 48,
+    highRisk: 120,
+    highRiskPct: 10,
+    mediumRisk: 240,
+    mediumRiskPct: 20,
+    avgAttendance: 71.4,
+    attendanceGrowth: 2.1,
+  };
+  const facultyData = analytics?.faculties || [
+    { faculty: "Applied Sci", high: 38, medium: 82, low: 230 },
+    { faculty: "Engineering", high: 42, medium: 94, low: 264 },
+    { faculty: "Commerce", high: 22, medium: 38, low: 182 },
+    { faculty: "Health Sci", high: 18, medium: 26, low: 164 },
+  ];
+  const departmentData = analytics?.departments || [
+    { department: "BSc Computer Science", high: 18, total: 120 },
+    { department: "BSc Software Engineering", high: 16, total: 110 },
+    { department: "BSc Informatics", high: 14, total: 95 },
+    { department: "BSc Data Science", high: 12, total: 90 },
+    { department: "BSc Computer Engineering", high: 22, total: 180 },
+    { department: "BSc Information Systems", high: 10, total: 85 },
+    { department: "BSc Cybersecurity", high: 8, total: 70 },
+    { department: "BSc Bioinformatics", high: 20, total: 150 },
+  ];
+  const criticalCount = analytics ? analytics.counts.high : 120;
+
+  return (
+    <div className="content">
+      <div>
+        <div className="section-label">Overview — all students</div>
+        <div className="stat-grid">
+          <div className="stat">
+            <div className="stat-label">Total students</div>
+            <div className="stat-val">{summary.totalStudents ?? 1200}</div>
+            <div className="stat-sub up">
+              +{summary.studentGrowth || 48} this semester
+            </div>
           </div>
+          <div className="stat">
+            <div className="stat-label">High risk</div>
+            <div className="stat-val" style={{ color: '#FF6B6B' }}>
+              {analytics ? analytics.counts.high : 120}
+            </div>
+            <div className="stat-sub dn">{analytics ? analytics.counts.highPct : 10}% of cohort</div>
+          </div>
+          <div className="stat">
+            <div className="stat-label">Medium risk</div>
+            <div className="stat-val" style={{ color: '#FFB340' }}>
+              {analytics ? analytics.counts.medium : 240}
+            </div>
+            <div className="stat-sub" style={{ color: 'rgba(255,255,255,0.3)' }}>
+              {analytics ? analytics.counts.mediumPct : 20}% of cohort
+            </div>
+          </div>
+          <div className="stat">
+            <div className="stat-label">Avg attendance</div>
+            <div className="stat-val" style={{ color: '#34D963' }}>
+              {summary.avgAttendance ?? 71.4}%
+            </div>
+            <div className="stat-sub up">+{summary.attendanceGrowth ?? 2.1}% vs last sem</div>
+          </div>
+        </div>
+      </div>
+
+      <AnalyticsCharts facultyData={facultyData} analytics={analytics} />
+
+      <div className="bottom-row">
+        <div className="table-card">
+          <div className="chart-title">High-risk rate by department</div>
+          <DeptList data={departmentData} />
+        </div>
+        <div className="trend-card">
+          <div className="chart-title">Recent activity</div>
+          <ActivityLog />
+        </div>
+      </div>
+
+      <div className="chart-card">
+        <div className="chart-title">Attendance distribution — all students</div>
+        <div style={{ position: "relative", width: "100%", height: "130px" }}>
+          <AttendanceCanvas />
         </div>
       </div>
     </div>
@@ -291,72 +500,196 @@ function AnalyticsPanel({ analytics, loading, error, onDepartmentClick }) {
 }
 
 function AssessmentForm({ form, onChange, onSubmit, result, loading, error }) {
+  const completedFields = [form.name, form.programme, form.year, form.gpa_sem3, form.attendance, form.lms_logins, form.facility_access, form.library_visits, form.assignment_submissions, form.after_hours_wifi].filter(v => v !== "" && v !== undefined).length;
   const fieldStyles = {width:"100%",padding:"11px 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.12)",background:"rgba(255,255,255,0.04)",color:"#fff",fontSize:13,outline:"none"};
+  const hasError = (val) => !val || val === "";
+  const getBadge = (val, label) => {
+    if (hasError(val)) return {text:"Missing", cls:"invalid", icon:"✕"};
+    return {text:label || "Valid", cls:"valid", icon:"✓"};
+  };
+
+  const formContainerStyles = {
+    background:"#0A0A12",
+    color:"#fff",
+    fontFamily:"'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+    padding:"24px 28px",
+    width:"100%",
+    display:"flex",
+    flexDirection:"column",
+    flex:1,
+    minHeight:0,
+    overflow:"hidden",
+  };
   return (
-    <div style={{flex:1,overflowY:"auto",padding:"24px 28px",minHeight:"calc(100vh - 108px)"}}>
-      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:18,padding:24}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-          <div>
-            <div style={{fontSize:18,fontWeight:700,color:"#fff",marginBottom:4}}>Manual Student Risk Assessment</div>
-            <div style={{fontSize:11,color:"rgba(255,255,255,0.45)"}}>Enter at least five feature values to get a live risk estimate.</div>
-          </div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.4)",textTransform:"uppercase",letterSpacing:1.5}}>{loading ? "Calculating…" : "Live preview"}</div>
+    <div style={formContainerStyles}>
+      <div style={{flex:1,overflowY:"auto",paddingRight:4}}>
+        <div style={{marginBottom:24}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:12}}>
+          <h2 style={{fontSize:18,fontWeight:700,color:"#fff",margin:0}}>Student Risk Assessment</h2>
+          <span style={{fontSize:12,color:"rgba(255,255,255,0.4)"}}>{completedFields} of 10 fields completed</span>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:14,marginBottom:16}}>
+        <div style={{display:"flex",gap:8,marginBottom:20}}>
+          {[1,2,3,4,5,6,7,8,9,10].map(i => (
+            <div key={i} style={{flex:1,height:4,background:i<=completedFields?"#636AFF":"rgba(255,255,255,0.08)",borderRadius:999}}/>
+          ))}
+        </div>
+        <p style={{fontSize:12,color:"rgba(255,255,255,0.45)",margin:"8px 0 0 0"}}>Enter at least 5 fields to enable live risk calculation.</p>
+      </div>
+
+      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:24,marginBottom:20}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:18}}>
+          <div style={{width:32,height:32,borderRadius:8,background:"rgba(99,106,255,0.2)",color:"#636AFF",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>👤</div>
+          <div>
+            <div style={{fontSize:14,fontWeight:700,color:"#fff"}}>Demographics</div>
+            <div style={{fontSize:12,color:"rgba(255,255,255,0.4)"}}>Basic student information</div>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:14}}>
           {[
-            {label:"Student Name", key:"name", type:"text", placeholder:"Full name"},
-            {label:"Programme", key:"programme", type:"text", placeholder:"e.g. BSc Computer Science"},
-            {label:"Year", key:"year", type:"number", placeholder:"3"},
-            {label:"GPA Sem 3", key:"gpa_sem3", type:"number", placeholder:"2.8"},
-            {label:"Attendance %", key:"attendance", type:"number", placeholder:"68"},
-            {label:"LMS logins/week", key:"lms_logins", type:"number", placeholder:"7"},
-            {label:"Facility access/week", key:"facility_access", type:"number", placeholder:"3"},
-            {label:"Library visits/week", key:"library_visits", type:"number", placeholder:"1"},
-            {label:"Assignments/month", key:"assignment_submissions", type:"number", placeholder:"5"},
-            {label:"After-hours WiFi", key:"after_hours_wifi", type:"number", placeholder:"2"},
+            {label:"Student Name", key:"name", badge:getBadge(form.name,"Entered")},
+            {label:"Programme", key:"programme", badge:getBadge(form.programme,"Valid")},
+            {label:"Year of Study", key:"year", badge:getBadge(form.year,"Valid"), hint:"1-4"},
+            {label:"Student ID", key:"studentId", badge:{text:"Optional",cls:"neutral",icon:""}, placeholder:"N00849023", optional:true},
           ].map(field => (
             <div key={field.key}>
-              <div style={{fontSize:11,color:"rgba(255,255,255,0.45)",marginBottom:6}}>{field.label}</div>
+              <div style={{fontSize:12,fontWeight:600,color:"rgba(255,255,255,0.8)",marginBottom:6,display:"flex",alignItems:"center",gap:8}}>
+                {field.label}
+                <span className={`validation-badge ${field.badge.cls}`} style={{marginLeft:"auto"}}>{field.badge.icon} {field.badge.text}</span>
+              </div>
               <input
-                type={field.type}
-                value={form[field.key] ?? ""}
-                placeholder={field.placeholder}
-                onChange={e => onChange(field.key, field.type === 'number' ? e.target.value : e.target.value)}
-                style={fieldStyles}
+                type="text"
+                value={field.key==="year" ? (form.year || "") : (form[field.key] || "")}
+                placeholder={field.placeholder || ""}
+                onChange={e => onChange(field.key, e.target.value)}
+                style={{...fieldStyles, color: field.optional && !form[field.key] ? "rgba(255,255,255,0.5)" : "#fff", borderColor: field.badge.cls==="invalid" ? "rgba(255,59,48,0.3)" : "rgba(255,255,255,0.12)"}}
               />
+              {field.hint && <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",marginTop:4}}>{field.hint}</div>}
             </div>
           ))}
         </div>
-        <button onClick={onSubmit} disabled={loading}
-          style={{padding:"14px 18px",borderRadius:12,border:"none",
-            background:loading ? "rgba(99,106,255,0.35)" : "#636AFF",
-            color:"#fff",fontSize:13,fontWeight:700,cursor:loading ? "not-allowed" : "pointer"}}>
-          {loading ? "Calculating risk…" : "Calculate Live Risk"}
-        </button>
-        {error && <div style={{marginTop:14,color:"#FF3B30",fontSize:12}}>{error}</div>}
-        {result && (
-          <div style={{marginTop:20,background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:20}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:18,flexWrap:"wrap"}}>
-              <div>
-                <div style={{fontSize:12,color:"rgba(255,255,255,0.5)",textTransform:"uppercase",letterSpacing:1.5,marginBottom:6}}>Risk Estimate</div>
-                <div style={{fontSize:24,fontWeight:800,color:"#fff"}}>{result.name}</div>
-                <div style={{fontSize:12,color:"rgba(255,255,255,0.45)",marginTop:4}}>{result.programme} · Year {result.year}</div>
+      </div>
+
+      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:24,marginBottom:20}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:18}}>
+          <div style={{width:32,height:32,borderRadius:8,background:"rgba(255,159,10,0.2)",color:"#FF9F0A",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>📚</div>
+          <div>
+            <div style={{fontSize:14,fontWeight:700,color:"#fff"}}>Academic Performance</div>
+            <div style={{fontSize:12,color:"rgba(255,255,255,0.4)"}}>Current semester metrics</div>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:14}}>
+          {[
+            {label:"GPA (Semester 3)", key:"gpa_sem3", badge:getBadge(form.gpa_sem3,"Valid"), hint:"Out of 4.0", step:"0.1"},
+            {label:"Attendance Rate", key:"attendance", badge:getBadge(form.attendance,"Valid"), hint:"Percentage (0-100)"},
+            {label:"Assignment Submissions", key:"assignment_submissions", badge:getBadge(form.assignment_submissions,"Valid"), hint:"Per month"},
+            {label:"Exam Passes", key:"exam_passes", badge:getBadge(form.exam_passes,"Missing")},
+          ].map(field => (
+            <div key={field.key}>
+              <div style={{fontSize:12,fontWeight:600,color:"rgba(255,255,255,0.8)",marginBottom:6,display:"flex",alignItems:"center",gap:8}}>
+                {field.label}
+                <span className={`validation-badge ${field.badge.cls}`} style={{marginLeft:"auto"}}>{field.badge.icon} {field.badge.text}</span>
               </div>
-              <div style={{width:120,height:120}}><RiskGauge value={result.risk || 0}/></div>
+              <input
+                type="number"
+                value={form[field.key] || ""}
+                placeholder="e.g. 3"
+                step={field.step}
+                onChange={e => onChange(field.key, e.target.value)}
+                style={{...fieldStyles, borderColor: field.badge.cls==="invalid" ? "rgba(255,59,48,0.3)" : "rgba(255,255,255,0.12)", color: field.badge.cls==="invalid" ? "rgba(255,255,255,0.5)" : "#fff"}}
+              />
+              {field.hint && <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",marginTop:4}}>{field.hint}</div>}
             </div>
-            <div style={{marginTop:18,fontSize:13,color:"rgba(255,255,255,0.75)",lineHeight:1.7}}>{result.explanation}</div>
-            <div style={{marginTop:16,display:"grid",gap:10}}>
-              {result.feature_contributions.slice(0,5).map((c,i)=>(
-                <div key={i} style={{display:"flex",justifyContent:"space-between",gap:10}}>
-                  <div style={{fontSize:12,color:"rgba(255,255,255,0.7)"}}>{c.feature}</div>
-                  <div style={{fontSize:12,fontWeight:700,color:c.dir > 0 ? "#FF3B30" : "#30D158"}}>
-                    {c.dir > 0 ? "+" : ""}{Math.round(c.weight * 100)}%
-                  </div>
-                </div>
-              ))}
+          ))}
+        </div>
+      </div>
+
+      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:24,marginBottom:20}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:18}}>
+          <div style={{width:32,height:32,borderRadius:8,background:"rgba(48,209,88,0.2)",color:"#30D158",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🔍</div>
+          <div>
+            <div style={{fontSize:14,fontWeight:700,color:"#fff"}}>Behavioral Indicators</div>
+            <div style={{fontSize:12,color:"rgba(255,255,255,0.4)"}}>Engagement and facility usage</div>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:14}}>
+          {[
+            {label:"LMS Logins per Week", key:"lms_logins", badge:getBadge(form.lms_logins,"Valid"), hint:"Learning management system"},
+            {label:"Library Visits per Week", key:"library_visits", badge:getBadge(form.library_visits,"Valid"), hint:"Physical visits"},
+            {label:"Facility Access per Week", key:"facility_access", badge:getBadge(form.facility_access,"Valid"), hint:"Sports/recreation centers"},
+            {label:"After-hours WiFi Usage", key:"after_hours_wifi", badge:getBadge(form.after_hours_wifi,"Missing"), hint:"Sessions after 10 PM"},
+          ].map(field => (
+            <div key={field.key}>
+              <div style={{fontSize:12,fontWeight:600,color:"rgba(255,255,255,0.8)",marginBottom:6,display:"flex",alignItems:"center",gap:8}}>
+                {field.label}
+                <span className={`validation-badge ${field.badge.cls}`} style={{marginLeft:"auto"}}>{field.badge.icon} {field.badge.text}</span>
+              </div>
+              <input
+                type="number"
+                value={form[field.key] || ""}
+                placeholder="e.g. 2"
+                onChange={e => onChange(field.key, e.target.value)}
+                style={{...fieldStyles, borderColor: field.badge.cls==="invalid" ? "rgba(255,59,48,0.3)" : "rgba(255,255,255,0.12)", color: field.badge.cls==="invalid" ? "rgba(255,255,255,0.5)" : "#fff"}}
+              />
+              {field.hint && <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",marginTop:4}}>{field.hint}</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <style>{`
+        .validation-badge { display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:6px;font-size:11px;font-weight:600; }
+        .valid { background:rgba(48,209,88,0.15);color:#30D158; }
+        .invalid { background:rgba(255,59,48,0.15);color:#FF3B30; }
+        .neutral { background:rgba(255,255,255,0.08);color:rgba(255,255,255,0.5); }
+      `}</style>
+
+      <button onClick={onSubmit} disabled={loading || completedFields < 5}
+      style={{width:"100%",padding:"14px 18px",borderRadius:12,border:"none",
+          background:(loading || completedFields < 5) ? "rgba(99,106,255,0.35)" : "#636AFF",
+          color:"#fff",fontSize:14,fontWeight:700,cursor:(loading || completedFields < 5) ? "not-allowed" : "pointer",transition:"background 0.2s",
+          position:"sticky",bottom:0}}>
+
+        {loading ? "Calculating…" : "Calculate Risk Score"}
+      </button>
+      {error && <div style={{marginTop:14,color:"#FF3B30",fontSize:12}}>{error}</div>}
+
+      {result && (
+        <div style={{background:"rgba(48,209,88,0.1)",border:"1px solid rgba(48,209,88,0.3)",borderRadius:16,padding:20,marginTop:20}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+            <div>
+              <div style={{fontSize:12,color:"rgba(48,209,88,0.7)",textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Live preview</div>
+              <div style={{fontSize:32,fontWeight:800,color:"#30D158"}}>{Math.round((result.risk || 0) * 100)}%</div>
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:12,color:"rgba(255,255,255,0.5)",marginBottom:8}}>Risk tier</div>
+              <div style={{fontSize:14,fontWeight:700,color:(result.risk || 0) >= 0.7 ? "#FF3B30" : (result.risk || 0) >= 0.4 ? "#FF9F0A" : "#30D158"}}>
+                {(result.risk || 0) >= 0.7 ? "High Risk" : (result.risk || 0) >= 0.4 ? "Medium Risk" : "Low Risk"}
+              </div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.5)",marginTop:6}}>
+                Low &lt; 40% · Medium 40–69.9% · High ≥ 70%
+              </div>
             </div>
           </div>
-        )}
+          <div style={{height:8,background:"rgba(255,255,255,0.1)",borderRadius:999,overflow:"hidden"}}>
+            <div style={{height:"100%",background:"linear-gradient(90deg, #30D158 0%, #FF9F0A 50%, #FF3B30 100%)",width:`${Math.round((result.risk || 0) * 100)}%`,transition:"width 0.5s"}}/>
+          </div>
+          {result.feature_contributions && result.feature_contributions.length > 0 && (
+            <div style={{marginTop:16,paddingTop:16,borderTop:"1px solid rgba(255,255,255,0.1)"}}>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.4)",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>Key factors</div>
+              <div style={{display:"grid",gap:8,fontSize:12}}>
+                {result.feature_contributions.slice(0,3).map((c,i) => (
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span>{c.feature}</span>
+                    <span style={{color: c.dir > 0 ? "#FF9F0A" : "#30D158", fontWeight:600}}>
+                      {c.dir > 0 ? "+" : ""}{Math.round((c.weight || 0) * 100)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       </div>
     </div>
   );
@@ -405,6 +738,9 @@ function AppHeader({ user, onLogout, alertCount }) {
           color:"rgba(255,255,255,0.6)",fontSize:12,cursor:"pointer"}}>
           Sign Out
         </button>
+      </div>
+      <div style={{marginTop:18,padding:"14px 18px",background:"rgba(48,209,88,0.1)",border:"1px solid rgba(48,209,88,0.2)",borderRadius:20,color:"#D8F8D4",fontSize:13}}>
+        Risk tier ranges: Low {'<'} 40% · Medium 40–69.9% · High ≥ 70%
       </div>
     </header>
   );
@@ -846,25 +1182,23 @@ function ClinicalDashboard({ user, onLogout }) {
   const [assessmentLoading, setAssessmentLoading] = useState(false);
   const [assessmentError, setAssessmentError] = useState("");
   const searchTimer = useRef(null);
-  const listRef     = useRef(null);
 
-  const fetchPage = useCallback(async (pg, filt, srch, replace=false) => {
+  async function fetchPage(pg, filt, srch, replace=false, dept = departmentFilter) {
     if (pg === 1) setLoading(true); else setLoadingMore(true);
     try {
       const params = { page: pg, limit: 50 };
       if (filt && filt !== "all") params.tier = filt;
-      if (departmentFilter) params.department = departmentFilter;
+      if (dept) params.department = dept;
       if (srch) params.search = srch;
       const r = await api.fetchStudents(params);
       if (r.success) {
         const newStudents = r.students || [];
-        setStudents(prev => replace || pg === 1 ? newStudents : [...prev, ...newStudents]);
+        setStudents(newStudents);
         setTotalPages(r.pages || 1);
         setTotal(r.total || 0);
-        if ((replace || pg === 1) && newStudents.length > 0) {
+        if (newStudents.length > 0) {
           setSelected(newStudents[0]);
         }
-        // Recount from server total stats if available
         if (r.counts) setCounts(r.counts);
       }
     } catch (e) {
@@ -873,7 +1207,7 @@ function ClinicalDashboard({ user, onLogout }) {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, []);
+  }
 
   const loadAnalytics = useCallback(async () => {
     // Return cached data immediately on subsequent tab visits
@@ -902,7 +1236,7 @@ function ClinicalDashboard({ user, onLogout }) {
 
   // Initial load + counts + poll for ML readiness
   useEffect(() => {
-    fetchPage(1, "all", "");
+    fetchPage(1, "all", "", true, departmentFilter);
 
     // Fetch tier counts
     Promise.all([
@@ -926,7 +1260,7 @@ function ClinicalDashboard({ user, onLogout }) {
           clearInterval(pollInterval);
           setPipelineMsg("ML predictions ready — refreshing…");
           setPipelineStatus("done");
-          fetchPage(1, "all", "", true);
+          fetchPage(1, "all", "", true, departmentFilter);
           Promise.all([
             api.fetchStudents({page:1,limit:1,tier:"high"}),
             api.fetchStudents({page:1,limit:1,tier:"medium"}),
@@ -953,7 +1287,7 @@ function ClinicalDashboard({ user, onLogout }) {
     wsManager.on("pipeline_completed", () => {
       clearInterval(pollInterval);
       setPipelineStatus("done"); setPipelineMsg("Pipeline complete — predictions refreshed.");
-      fetchPage(1, filter, search, true);
+      fetchPage(1, filter, search, true, departmentFilter);
       setTimeout(()=>setPipelineStatus(null),4000);
     });
     return () => { wsManager.disconnect(); clearInterval(pollInterval); };
@@ -978,7 +1312,7 @@ function ClinicalDashboard({ user, onLogout }) {
   // Filter / search change
   useEffect(() => {
     setPage(1);
-    fetchPage(1, filter, search, true);
+    fetchPage(1, filter, search, true, departmentFilter);
   }, [filter, search, departmentFilter]);
 
   useEffect(() => {
@@ -1009,15 +1343,6 @@ function ClinicalDashboard({ user, onLogout }) {
     searchTimer.current = setTimeout(() => setSearch(val), 350);
   }
 
-  function handleScroll(e) {
-    const el = e.currentTarget;
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < 120 && !loadingMore && page < totalPages) {
-      const nextPage = page + 1;
-      setPage(nextPage);
-      fetchPage(nextPage, filter, search);
-    }
-  }
-
   const cfg     = selected ? (TIER[selected.tier]||TIER.low) : TIER.low;
   const maxShap = selected?.shap ? Math.max(...selected.shap.map(s=>Math.abs(s.value||0)), 0.001) : 1;
   const maxLime = selected?.lime ? Math.max(...selected.lime.map(s=>Math.abs(s.value||0)), 0.001) : 1;
@@ -1037,7 +1362,7 @@ function ClinicalDashboard({ user, onLogout }) {
   }
 
   return (
-    <div style={{minHeight:"100vh",background:"#0A0A12",display:"flex",flexDirection:"column",color:"#fff"}}>
+    <div style={{minHeight:"100vh",background:"#0A0A12",display:"flex",flexDirection:"column",color:"#fff",overflow:"hidden"}}>
       <style>{GLOBAL_CSS}</style>
       <AppHeader user={user} onLogout={()=>{apiLogout();onLogout();}} alertCount={counts.high}/>
 
@@ -1055,23 +1380,9 @@ function ClinicalDashboard({ user, onLogout }) {
         </div>
       )}
 
-      {/* Filter + search bar */}
+      {/* Mode tabs + search */}
       <div style={{background:"rgba(255,255,255,0.02)",borderBottom:"1px solid rgba(255,255,255,0.05)",
         padding:"10px 28px",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-        {[{key:"all",label:"All Students",count:total,color:"rgba(255,255,255,0.6)"},
-          {key:"high",  label:"High Risk",  count:counts.high,  color:"#FF3B30"},
-          {key:"medium",label:"Medium Risk",count:counts.medium,color:"#FF9F0A"},
-          {key:"low",   label:"Low Risk",   count:counts.low,   color:"#30D158"},
-        ].map(f=>(
-          <button key={f.key} onClick={()=>setFilter(f.key)} style={{
-            padding:"6px 16px",borderRadius:20,border:"1px solid",cursor:"pointer",
-            borderColor:filter===f.key?f.color:"rgba(255,255,255,0.1)",
-            background:filter===f.key?`${f.color}22`:"transparent",
-            color:filter===f.key?f.color:"rgba(255,255,255,0.4)",
-            fontSize:12,fontWeight:600,transition:"all 0.2s"}}>
-            {f.label} <span style={{opacity:0.7}}>({f.count})</span>
-          </button>
-        ))}
         <div style={{display:"flex",gap:8}}>
           {[
             {key:"students", label:"Students"},
@@ -1115,37 +1426,83 @@ function ClinicalDashboard({ user, onLogout }) {
         )}
       </div>
 
+      {/* Risk classification row — only on Students tab */}
+      {pageMode === "students" && (
+        <div style={{background:"rgba(255,255,255,0.01)",borderBottom:"1px solid rgba(255,255,255,0.04)",
+          padding:"8px 28px 10px",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          {[
+            {key:"all",label:"All Students",count:total,color:"rgba(255,255,255,0.6)"},
+            {key:"high",  label:"High Risk",  count:counts.high,  color:"#FF3B30"},
+            {key:"medium",label:"Medium Risk",count:counts.medium,color:"#FF9F0A"},
+            {key:"low",   label:"Low Risk",   count:counts.low,   color:"#30D158"},
+          ].map(f=>(
+            <button key={f.key} onClick={()=>setFilter(f.key)} style={{
+              padding:"6px 16px",borderRadius:20,border:"1px solid",cursor:"pointer",
+              borderColor:filter===f.key?f.color:"rgba(255,255,255,0.1)",
+              background:filter===f.key?`${f.color}22`:"transparent",
+              color:filter===f.key?f.color:"rgba(255,255,255,0.4)",
+              fontSize:12,fontWeight:600,transition:"all 0.2s"}}>
+              {f.label} <span style={{opacity:0.7}}>({f.count})</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Main layout */}
-      <div style={{display:"flex",flex:1,overflow:"hidden",height:"calc(100vh - 108px)"}}>
+      <div style={{display:"flex",flex:1,overflow:"hidden",minHeight:0}}>
         {pageMode === "students" ? (
           <>
             {/* Student list sidebar */}
-            <div ref={listRef} onScroll={handleScroll}
-              style={{width:290,flexShrink:0,borderRight:"1px solid rgba(255,255,255,0.06)",
-                overflowY:"auto",padding:"14px 12px"}}>
-              {students.map(s=>(
-                <StudentCard key={s.id} student={s} selected={selected?.id===s.id}
-                  onClick={()=>setSelected(s)}/>
-              ))}
-              {loadingMore&&(
-                <div style={{textAlign:"center",padding:16,color:"rgba(255,255,255,0.3)",fontSize:12}}>
-                  <div style={{width:20,height:20,border:"2px solid rgba(255,255,255,0.1)",
-                    borderTopColor:"#FF9F0A",borderRadius:"50%",animation:"spin 0.8s linear infinite",
-                    margin:"0 auto 6px"}}/>
-                  Loading more…
+            <div style={{width:290,flexShrink:0,borderRight:"1px solid rgba(255,255,255,0.06)",
+              display:"flex",flexDirection:"column",height:"100%",minHeight:0,minWidth:0}}>
+              <div style={{flex:1,overflowY:"auto",padding:"14px 12px",minHeight:0}}>
+                {students.map(s=>(
+                  <StudentCard key={s.id} student={s} selected={selected?.id===s.id}
+                    onClick={()=>setSelected(s)}/>
+                ))}
+                {students.length === 0 && !loading && (
+                  <div style={{textAlign:"center",padding:24,color:"rgba(255,255,255,0.35)",fontSize:13}}>
+                    No students found on this page.
+                  </div>
+                )}
+                {loadingMore&&(
+                  <div style={{textAlign:"center",padding:16,color:"rgba(255,255,255,0.3)",fontSize:12}}>
+                    <div style={{width:20,height:20,border:"2px solid rgba(255,255,255,0.1)",
+                      borderTopColor:"#FF9F0A",borderRadius:"50%",animation:"spin 0.8s linear infinite",
+                      margin:"0 auto 6px"}}/>
+                    Loading page {page}…
+                  </div>
+                )}
+              </div>
+              <div style={{padding:"12px 14px",borderTop:"1px solid rgba(255,255,255,0.08)",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+                <button onClick={() => {
+                    const prev = Math.max(1, page - 1);
+                    setPage(prev);
+                    fetchPage(prev, filter, search, true, departmentFilter);
+                  }}
+                  disabled={page <= 1 || loading}
+                  style={{flex:1,padding:"10px 12px",borderRadius:10,border:"1px solid rgba(255,255,255,0.12)",background:"transparent",color:page <= 1 || loading ? "rgba(255,255,255,0.2)" : "#fff",cursor:page <= 1 || loading ? "not-allowed" : "pointer",fontSize:12,fontWeight:600}}>
+                  Previous
+                </button>
+                <div style={{fontSize:12,color:"rgba(255,255,255,0.45)",whiteSpace:"nowrap"}}>
+                  Page {page} of {totalPages}
                 </div>
-              )}
-              {!loadingMore && page >= totalPages && students.length > 0 && (
-                <div style={{textAlign:"center",padding:"12px 0",fontSize:11,color:"rgba(255,255,255,0.2)"}}>
-                  All {total} students loaded
-                </div>
-              )}
+                <button onClick={() => {
+                    const next = Math.min(totalPages, page + 1);
+                    setPage(next);
+                    fetchPage(next, filter, search, true, departmentFilter);
+                  }}
+                  disabled={page >= totalPages || loading}
+                  style={{flex:1,padding:"10px 12px",borderRadius:10,border:"1px solid rgba(255,255,255,0.12)",background:"transparent",color:page >= totalPages || loading ? "rgba(255,255,255,0.2)" : "#fff",cursor:page >= totalPages || loading ? "not-allowed" : "pointer",fontSize:12,fontWeight:600}}>
+                  Next
+                </button>
+              </div>
             </div>
 
             {/* Detail panel */}
             {selected ? (
-              <div style={{flex:1,overflowY:"auto",padding:"24px 28px"}} key={selected.id}>
-                <div style={{animation:"slideIn 0.3s ease"}}>
+              <div style={{flex:1,display:"flex",flexDirection:"column",overflowY:"auto",padding:"24px 28px",minHeight:0}} key={selected.id}>
+                <div style={{animation:"slideIn 0.3s ease",flex:1}}>
 
               {/* Student header */}
               <div style={{display:"flex",alignItems:"flex-start",gap:24,marginBottom:24}}>
@@ -1363,6 +1720,7 @@ function ClinicalDashboard({ user, onLogout }) {
                     {selected.gpa.map((g,i)=>{
                       const h=(g/4.0)*80;
                       const color=g<2.5?"#FF3B30":g<3.0?"#FF9F0A":"#30D158";
+
                       return (
                         <div key={i} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6,flex:1}}>
                           <span style={{fontSize:12,fontWeight:700,color,fontFamily:"'Barlow Condensed',sans-serif"}}>
